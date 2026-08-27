@@ -1,0 +1,236 @@
+//package com.example.myapplication
+//
+//// Imports bring in the necessary tools and libraries for your app to work.
+//import android.os.Bundle
+//import android.widget.Toast
+//import androidx.activity.ComponentActivity
+//import androidx.activity.compose.setContent
+//import androidx.activity.enableEdgeToEdge
+//import androidx.compose.foundation.Image
+//import androidx.compose.foundation.background
+//import androidx.compose.foundation.layout.Arrangement
+//import androidx.compose.foundation.layout.Box
+//import androidx.compose.foundation.layout.fillMaxSize
+//import androidx.compose.foundation.layout.padding
+//import androidx.compose.material3.Scaffold
+//import androidx.compose.material3.Surface
+//import androidx.compose.material3.Text
+//import androidx.compose.runtime.Composable
+//import androidx.compose.ui.Modifier
+//import androidx.compose.ui.graphics.Color
+//import androidx.compose.ui.tooling.preview.Preview
+//import androidx.compose.ui.unit.dp
+//import com.example.myapplication.ui.theme.MyApplicationTheme
+//import androidx.compose.foundation.layout.Column
+//import androidx.compose.foundation.layout.Row
+//import androidx.compose.foundation.layout.fillMaxWidth
+//import androidx.compose.foundation.layout.height
+//import androidx.compose.foundation.layout.width
+//import androidx.compose.material3.Button
+//import androidx.compose.ui.Alignment
+//import androidx.compose.ui.layout.ContentScale
+//import androidx.compose.ui.platform.LocalContext
+//import androidx.compose.ui.res.painterResource
+//import androidx.compose.ui.res.stringResource
+//import androidx.compose.ui.text.style.TextAlign
+//import androidx.compose.ui.unit.sp
+//
+//
+///**
+// * MainActivity is the entry point of your Android application.
+// * It inherits from ComponentActivity, which provides the base logic for a modern Android screen.
+// */
+//class MainActivity : ComponentActivity() { // MainActivity starts the screen.
+//
+//    /**
+//     * onCreate is the first method called when the Activity is created.
+//     * This is where you initialize your UI and setup the app's state.
+//     */
+//    override fun onCreate(savedInstanceState: Bundle?) {
+//        super.onCreate(savedInstanceState)
+//
+//        // enableEdgeToEdge makes the app content draw behind system bars (status bar and navigation bar).
+//        enableEdgeToEdge()
+//
+//        // setContent is where you start the compose UI.
+//        setContent { // UI goes here
+//            // MyApplicationTheme applies your app's custom colors, typography, and shapes.
+//            MyApplicationTheme {
+//                // Scaffold is a parent container, but it is the "Big Boss" of layout containers!
+//                // It is designed to manage the entire screen structure according to Material Design rules.
+//                Scaffold(modifier = Modifier.fillMaxSize(),) { innerPadding ->
+//                    // We call our Greeting composable function and pass it a name and the padding from Scaffold.
+//                    Column {
+//                        //1. Modifier: Start with the blank "identity" object.
+//                        //2. .padding(10.dp): Create a new object that adds padding instructions.
+//                        //3. .fillMaxWidth(): Create another new object that adds width instructions.
+//                        Greeting(
+//                            name = "Android",
+//                            modifier = Modifier.padding(innerPadding)
+//                        )
+//                        // It is a good practice to pass the modifier attribute(s) along with the modifier
+//                        // from the parent composable. Update the modifier parameter as follows:
+//                        ResearchScreen(
+//                            "002",
+//                            value = 2.35,
+//                            modifier = Modifier.padding(innerPadding)
+//                        )
+//                        GreetingImage(
+//                            message = stringResource(R.string.happy_birthday_sam),
+//                            from = "From Emma"
+//                        )
+//                    }
+//
+//                }
+//            }
+//        }
+//    }
+//}
+//
+///**
+// * A composable function is a Kotlin function that describes UI.
+// * This one displays a "Hello" text message.
+// */
+//@Composable // @Composable means this function can be used by Compose to create UI.
+//// All functions marked with the @Composable annotation can be called from the setContent() function or from other Composable functions.
+//// Note: @Composable function names are capitalized and they can't return anything.
+//fun Greeting(name: String, modifier: Modifier = Modifier) { // Modifier is a default object with all parameters to be blank
+//    // Surface provides a background layer (like a sheet of paper) for its children.
+//    Surface(color = Color.Cyan, modifier = modifier) { // Trailing Lambda: curly braces are used for the last 'content' parameter.
+//        // Note: The following UI components are technically an input parameter of the Surface function,
+//        // moved into curly braces using Trailing Lambda Syntax for better readability.
+//        Row(
+//            modifier = Modifier.padding(20.dp) // Use a NEW modifier for internal spacing
+//        ) { // Row contains multiple children UI elements placed horizontally
+//            Text(
+//                text = name,
+//                fontSize = 100.sp,
+//                lineHeight = 116.sp,
+//            )
+//            Text( // Text is a common Compose component used for displaying text on the screen.
+//                text = "Hello $name!",
+//                modifier = modifier.padding(24.dp) // The modifier put 16 dp of padding around the column.
+//            )
+//        }
+//    }
+//}
+//
+///**
+// * A Preview function allows you to see how your UI looks in the Android Studio Design tab
+// * without having to run the app on a physical device or emulator.
+// */
+//@Preview(showBackground = true) // Add a background to your composable preview.
+//@Composable
+//// To enable a preview of a composable, annotate with @Composable and @Preview.
+//// The @Preview annotation tells Android Studio that this composable should be shown in the design view.
+//fun GreetingPreview() {
+//    MyApplicationTheme {
+//        Greeting("Shibo")
+//    }
+//}
+//
+//
+//@Composable
+//fun ResearchScreen(ID: String, value: Double, modifier: Modifier = Modifier) {
+//    val context =
+//        LocalContext.current // LocalContext.current "grabs" the current environment information
+//
+//    // Column, Row, Surface and Box composables often act as parent UI containers to help arrange the layout.
+//    Column( // Column contains multiple children UI elements placed vertically
+//        // 1. Position inside the Column
+//        verticalArrangement = Arrangement.Center,       // Centers children vertically
+//
+//        // 2. Define the layout of the Column. This setting would apply to all its children components
+//        modifier = modifier
+//            .height(300.dp)    // Give it a specific height (e.g., 300dp)
+//            .padding(50.dp)    // Add some breathing room around the edges
+//            .background(Color.LightGray) // Optional: add color to "see"
+//    ) {
+//        Text("Research Measurement App", fontSize = 25.sp)
+//        Text(
+//            text = ID,
+//            lineHeight = 50.sp,
+//            textAlign = TextAlign.Center,
+//            modifier = Modifier.align(Alignment.CenterHorizontally) // <--- Individual
+//        )
+//        Text("Current value: $value")
+//        Button(
+//            onClick = { // When the user clicks the button, run the code inside onClick.
+//                println("Button clicked")
+//                // This shows a small popup message at the bottom of the phone screen
+//                Toast.makeText(context, "Measurement Started!", Toast.LENGTH_SHORT).show()
+//            }
+//
+//        ) {
+//            Text("Start Measurement") // Display the text “Start Measurement” inside the button.
+//        }
+//    }
+//
+//}
+//
+//
+//@Preview(showBackground = true) // Add a background to your composable preview.
+//@Composable
+//// To enable a preview of a composable, annotate with @Composable and @Preview.
+//// The @Preview annotation tells Android Studio that this composable should be shown in the design view.
+//fun ResearchScreenPreview() {
+//    ResearchScreen(ID = "002", value = 2.35)
+//}
+//
+//
+//
+//@Composable
+//fun GreetingText(message: String, from: String, modifier: Modifier = Modifier) {
+//    Column(
+//        verticalArrangement = Arrangement.Center,
+//        modifier = modifier
+//    ) {
+//        Text(
+//            text = message,
+//            fontSize = 100.sp,
+//            lineHeight = 116.sp,
+//            textAlign = TextAlign.Center
+//        )
+//        Text(
+//            text = from,
+//            fontSize = 36.sp,
+//            modifier = Modifier
+//                .padding(16.dp)
+//                .align(alignment = Alignment.End)
+//        )
+//    }
+//}
+//
+//
+//@Composable
+//fun GreetingImage(message: String, from: String, modifier: Modifier = Modifier) {
+//    // R class is an automatically generated class that contains all resources' ID (usually filename)
+//    val image = painterResource(R.drawable.androidparty) // drawable.androidparty is the resource directory
+//    // Box stacks items Front to Back (like a stack of photos)
+//    Box(modifier) {
+//        Image( // Put image down first
+//            painter = image,
+//            contentDescription = null,
+//            contentScale = ContentScale.Crop,
+//            alpha = 0.5F,
+//            modifier = Modifier
+//                .fillMaxSize()
+//        )
+//        GreetingText( // Put the text on top of the image
+//            message = message,
+//            from = from,
+//            modifier = Modifier
+//                .fillMaxSize()
+//                .padding(8.dp)
+//        )
+//    }
+//}
+//
+//@Preview(showBackground = true)
+//@Composable
+//fun BirthdayCardPreview() {
+//    GreetingImage(
+//        message = "Happy Birthday Sam!",
+//        from = "From Emma"
+//    )
+//}
