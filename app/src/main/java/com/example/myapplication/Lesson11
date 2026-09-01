@@ -42,6 +42,14 @@ import kotlinx.coroutines.delay
 /**
 Regular classes
  */
+// Measurement represents one measurement row (measurement values and metadata)
+data class Measurement(
+    val sampleId: String,
+    val repetition: Int,
+    val value: Double,
+    val timestamp: Long,
+    val status: MeasurementStatus
+)
 
 //  Create one class that represents the whole screen state, This is useful because the UI can receive one state object.
 data class ResearchUiState(
@@ -55,6 +63,12 @@ data class ResearchUiState(
     val message: String = ""
 )
 
+enum class MeasurementStatus { // Its items are enum constants, but can be displayed directly as strings
+    LOW,
+    NORMAL,
+    HIGH,
+}
+
 enum class DeviceConnectionState {
     DISCONNECTED,
     CONNECTING,
@@ -67,6 +81,129 @@ enum class AcquisitionState {
     RECORDING,
     STOPPED,
     ERROR
+}
+
+const val AUTOSAVE_FILENAME = "autosave_measurements.csv"
+
+/**
+CSC text processing functions
+ */
+// Convert measurements to Strings that can be saved in CSV files
+// We write this as a separate function instead of putting it into viewModels so we can reuse it
+fun measurementsToCsv(
+    measurementList: List<Measurement>
+): String {
+    val header = "sample_id,repetition,value,timestamp,status"
+    val rows =
+        measurementList.joinToString(separator = "\n") { measurement -> // The Transformation Lambda
+            val sampleId = escapeCsv(measurement.sampleId)
+            "$sampleId," +
+                    "${measurement.repetition}," +
+                    "${measurement.value}," +
+                    "${measurement.timestamp}," +
+                    "${measurement.status}"
+        }
+    return "$header\n$rows"
+}
+
+fun measurementsFromCsv(
+    csvText: String
+): List<Measurement> {
+
+    val lines = csvText
+        .lines()
+        .filter { it.isNotBlank() }
+
+    if (lines.size <= 1) {
+        return emptyList()
+    }
+
+    return lines
+        .drop(1)
+        .mapNotNull { line ->
+
+            val parts = line.split(",")
+
+            if (parts.size < 5) {
+                return@mapNotNull null
+            }
+
+            val sampleId = parts[0]
+            val repetition = parts[1].toIntOrNull()
+            val value = parts[2].toDoubleOrNull()
+            val timestamp = parts[3].toLongOrNull()
+            // Convert the String from the CSV back into the Enum type. Returns null if it doesn't find a match.
+            val status = MeasurementStatus.entries.find { it.name == parts[4] }
+
+            if (
+                repetition == null ||
+                value == null ||
+                timestamp == null ||
+                status == null
+            ) {
+                return@mapNotNull null
+            }
+
+            Measurement(
+                sampleId = sampleId,
+                repetition = repetition,
+                value = value,
+                timestamp = timestamp,
+                status = status
+            )
+        }
+}
+
+// Escape special characters in a string if it contains a comma, quote, or newline for saving.
+fun escapeCsv(value: String): String {
+    val needsEscaping =
+        value.contains(",") ||
+                value.contains("\"") ||
+                value.contains("\n")
+    return if (needsEscaping) {
+        "\"" + value.replace("\"", "\"\"") + "\""
+    } else {
+        value
+    }
+}
+
+// Cleans a string to make it safe for use as a file name.
+fun safeFilename(text: String): String {
+    return text
+        .trim()
+        .replace(Regex("[^A-Za-z0-9_-]"), "_")
+}
+
+/**
+Internal file writing and loading
+ */
+fun saveMeasurementsToInternalStorage(
+    context: Context,
+    measurements: List<Measurement>
+) {
+    val csvText = measurementsToCsv(measurements)
+
+    context.openFileOutput(
+        AUTOSAVE_FILENAME,
+        Context.MODE_PRIVATE
+    ).use { outputStream ->
+        outputStream.write(csvText.toByteArray())
+    }
+}
+
+suspend fun loadMeasurementsFromInternalStorage(
+    context: Context
+): List<Measurement> {
+    return withContext(Dispatchers.IO) {
+        val csvText = context
+            .openFileInput(AUTOSAVE_FILENAME)
+            .bufferedReader()
+            .use { reader ->
+                reader.readText()
+            }
+
+        measurementsFromCsv(csvText)
+    }
 }
 
 fun getDeviceStatusText(
@@ -91,19 +228,10 @@ fun getAcquisitionStatusText(
     }
 }
 
-// Cleans a string to make it safe for use as a file name.
-fun safeFilename(text: String): String {
-    return text
-        .trim()
-        .replace(Regex("[^A-Za-z0-9_-]"), "_")
-}
-
 /**
 ViewModel class
  */
-class ResearchViewModel(
-    private val measurementRepository: MeasurementRepository = MeasurementRepository()
-) : ViewModel() {
+class ResearchViewModel : ViewModel() {
 
     // There is no remember here because this state lives inside the ViewModel.
     // The by keyword lets us use uiState like a normal variable instead of writing uiState.value.
@@ -191,30 +319,54 @@ class ResearchViewModel(
 
     private fun addMeasurement(context: Context) {
 
-        if (uiState.sampleId.isBlank() || uiState.deviceConnectionState == DeviceConnectionState.DISCONNECTED) {
+        val sampleId = uiState.sampleId
+
+        if (sampleId.isBlank() || uiState.deviceConnectionState == DeviceConnectionState.DISCONNECTED) {
             return
         }
 
+        val value = Random.nextDouble(
+            from = 0.0,
+            until = 5.0
+        )
+
         val repetitionForThisSample =
             uiState.measurements.count {
-                it.sampleId == uiState.sampleId
+                it.sampleId == sampleId
             } + 1
 
-        val newMeasurement = measurementRepository.createSimulatedMeasurement(
-            sampleId = uiState.sampleId,
-            repetition = repetitionForThisSample
+        val status = when {
+            value > 4.0 -> MeasurementStatus.HIGH
+            value < 1.0 -> MeasurementStatus.LOW
+            else -> MeasurementStatus.NORMAL
+        }
+
+        val newMeasurement = Measurement(
+            sampleId = sampleId,
+            repetition = repetitionForThisSample,
+            value = value,
+            timestamp = System.currentTimeMillis(),
+            status = status
         )
 
         val updatedMeasurements = uiState.measurements + newMeasurement
 
         uiState = uiState.copy(
             measurements = updatedMeasurements, // old list + new item = new list. It does not change the old measurements list but reassigned it.
-            latestValue = newMeasurement.value,
+            latestValue = value,
             exportMessage = ""
         )
 
         // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
 
     }
 
@@ -224,7 +376,15 @@ class ResearchViewModel(
             exportMessage = ""
         )
         // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
     }
 
     fun clearMeasurements(context: Context) {
@@ -233,7 +393,15 @@ class ResearchViewModel(
             exportMessage = ""
         )
         // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
     }
 
     fun setExportMessage(exportMessage: String) {
@@ -243,26 +411,21 @@ class ResearchViewModel(
     }
 
     fun getCsvText(): String {
-        return measurementListToCsv(uiState.measurements)
+        return measurementsToCsv(uiState.measurements)
     }
 
-    private fun saveMeasurementsAsync(context: Context) {
+    private suspend fun autoSaveMeasurements(context: Context): Boolean {
         // Switch this block to the IO dispatcher.
-        viewModelScope.launch {
-            try {
-                measurementRepository.saveMeasurementsToInternal(
+        return  try {
+            withContext(Dispatchers.IO) {
+                saveMeasurementsToInternalStorage(
                     context = context,
                     measurements = uiState.measurements
                 )
-
-                uiState = uiState.copy(
-                    message = "Measurements auto-saved"
-                )
-            } catch (e: Exception) {
-                uiState = uiState.copy(
-                    message = "Auto-save failed"
-                )
             }
+            true
+        }catch (e: Exception){
+            false
         }
     }
 
@@ -274,7 +437,7 @@ class ResearchViewModel(
             )
 
             try {
-                val loadedMeasurements = measurementRepository.loadMeasurementsFromInternal(context)
+                val loadedMeasurements = loadMeasurementsFromInternalStorage(context)
 
                 uiState = uiState.copy(
                     measurements = loadedMeasurements,
@@ -283,6 +446,7 @@ class ResearchViewModel(
                 )
             } catch (e: Exception) {
                 uiState = uiState.copy(
+                    measurements = emptyList(),
                     isLoading = false,
                     message = "Could not load saved measurements: ${e.message}"
                 )
