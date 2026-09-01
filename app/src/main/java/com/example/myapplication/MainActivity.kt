@@ -1,33 +1,353 @@
 package com.example.myapplication
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlin.random.Random
+import android.content.Context
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+Regular classes
+ */
+// Measurement represents one measurement row (measurement values and metadata)
+data class Measurement(
+    val sampleId: String,
+    val repetition: Int,
+    val value: Double,
+    val timestamp: Long,
+    val status: MeasurementStatus
+)
+
+//  Create one class that represents the whole screen state, This is useful because the UI can receive one state object.
+data class ResearchUiState(
+    val sampleId: String = "",
+    val isConnected: Boolean = false,
+    val measurements: List<Measurement> = emptyList(),
+    val exportMessage: String = "",
+    val message: String = "",
+    val isLoading: Boolean = false
+)
+
+enum class MeasurementStatus { // Its items are enum constants, but can be displayed directly as strings
+    LOW,
+    NORMAL,
+    HIGH,
+}
+
+const val AUTOSAVE_FILENAME = "autosave_measurements.csv"
+
+/**
+CSC text processing functions
+ */
+// Convert measurements to Strings that can be saved in CSV files
+// We write this as a separate function instead of putting it into viewModels so we can reuse it
+fun measurementsToCsv(
+    measurementList: List<Measurement>
+): String {
+    val header = "sample_id,repetition,value,timestamp,status"
+    val rows =
+        measurementList.joinToString(separator = "\n") { measurement -> // The Transformation Lambda
+            val sampleId = escapeCsv(measurement.sampleId)
+            "$sampleId," +
+                    "${measurement.repetition}," +
+                    "${measurement.value}," +
+                    "${measurement.timestamp}," +
+                    "${measurement.status}"
+        }
+    return "$header\n$rows"
+}
+
+fun measurementsFromCsv(
+    csvText: String
+): List<Measurement> {
+
+    val lines = csvText
+        .lines()
+        .filter { it.isNotBlank() }
+
+    if (lines.size <= 1) {
+        return emptyList()
+    }
+
+    return lines
+        .drop(1)
+        .mapNotNull { line ->
+
+            val parts = line.split(",")
+
+            if (parts.size < 5) {
+                return@mapNotNull null
+            }
+
+            val sampleId = parts[0]
+            val repetition = parts[1].toIntOrNull()
+            val value = parts[2].toDoubleOrNull()
+            val timestamp = parts[3].toLongOrNull()
+            // Convert the String from the CSV back into the Enum type. Returns null if it doesn't find a match.
+            val status = MeasurementStatus.entries.find { it.name == parts[4] }
+
+            if (
+                repetition == null ||
+                value == null ||
+                timestamp == null ||
+                status == null
+            ) {
+                return@mapNotNull null
+            }
+
+            Measurement(
+                sampleId = sampleId,
+                repetition = repetition,
+                value = value,
+                timestamp = timestamp,
+                status = status
+            )
+        }
+}
+
+// Escape special characters in a string if it contains a comma, quote, or newline for saving.
+fun escapeCsv(value: String): String {
+    val needsEscaping =
+        value.contains(",") ||
+                value.contains("\"") ||
+                value.contains("\n")
+    return if (needsEscaping) {
+        "\"" + value.replace("\"", "\"\"") + "\""
+    } else {
+        value
+    }
+}
+
+// Cleans a string to make it safe for use as a file name.
+fun safeFilename(text: String): String {
+    return text
+        .trim()
+        .replace(Regex("[^A-Za-z0-9_-]"), "_")
+}
+
+/**
+Internal file writing and loading
+ */
+fun saveMeasurementsToInternalStorage(
+    context: Context,
+    measurements: List<Measurement>
+) {
+    val csvText = measurementsToCsv(measurements)
+
+    context.openFileOutput(
+        AUTOSAVE_FILENAME,
+        Context.MODE_PRIVATE
+    ).use { outputStream ->
+        outputStream.write(csvText.toByteArray())
+    }
+}
+
+suspend fun loadMeasurementsFromInternalStorage(
+    context: Context
+): List<Measurement> {
+    return withContext(Dispatchers.IO) {
+        val csvText = context
+            .openFileInput(AUTOSAVE_FILENAME)
+            .bufferedReader()
+            .use { reader ->
+                reader.readText()
+            }
+
+        measurementsFromCsv(csvText)
+    }
+}
+
+
+/**
+ViewModel class
+ */
+class ResearchViewModel : ViewModel() {
+
+    // There is no remember here because this state lives inside the ViewModel.
+    // The by keyword lets us use uiState like a normal variable instead of writing uiState.value.
+    var uiState by mutableStateOf(ResearchUiState())
+        private set
+
+    fun updateSampleId(newSampleId: String) {
+        uiState = uiState.copy(
+            sampleId = newSampleId,
+            exportMessage = ""
+        )
+    }
+
+    fun toggleConnection() {
+        uiState = uiState.copy(
+            isConnected = !uiState.isConnected
+        )
+    }
+
+    fun addMeasurement(context: Context) {
+
+        val sampleId = uiState.sampleId
+
+        if (sampleId.isBlank() || !uiState.isConnected) {
+            return
+        }
+
+        val value = Random.nextDouble(
+            from = 0.0,
+            until = 5.0
+        )
+
+        val repetitionForThisSample =
+            uiState.measurements.count {
+                it.sampleId == sampleId
+            } + 1
+
+        val status = when {
+            value > 4.0 -> MeasurementStatus.HIGH
+            value < 1.0 -> MeasurementStatus.LOW
+            else -> MeasurementStatus.NORMAL
+        }
+
+        val newMeasurement = Measurement(
+            sampleId = sampleId,
+            repetition = repetitionForThisSample,
+            value = value,
+            timestamp = System.currentTimeMillis(),
+            status = status
+        )
+
+        uiState = uiState.copy(
+            measurements = uiState.measurements + newMeasurement, // old list + new item = new list. It does not change the old measurements list but reassigned it.
+            exportMessage = ""
+        )
+
+        // Start a auto data saving coroutine tied to this ViewModel.
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
+
+    }
+
+    fun removeLastMeasurement(context: Context) {
+        uiState = uiState.copy(
+            measurements = uiState.measurements.dropLast(1),
+            exportMessage = ""
+        )
+        // Start a auto data saving coroutine tied to this ViewModel.
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
+    }
+
+    fun clearMeasurements(context: Context) {
+        uiState = uiState.copy(
+            measurements = emptyList(), // replace measurements with a new empty list
+            exportMessage = ""
+        )
+        // Start a auto data saving coroutine tied to this ViewModel.
+        viewModelScope.launch {
+            val savedSuccessfully = autoSaveMeasurements(context)
+
+            uiState = if (savedSuccessfully) {
+                uiState.copy(message = "Measurements auto-saved")
+            } else {
+                uiState.copy(message = "Auto-save failed")
+            }
+        }
+    }
+
+    fun setExportMessage(message: String) {
+        uiState = uiState.copy(
+            exportMessage = message
+        )
+    }
+
+    fun getCsvText(): String {
+        return measurementsToCsv(uiState.measurements)
+    }
+
+    private suspend fun autoSaveMeasurements(context: Context): Boolean {
+        // Switch this block to the IO dispatcher.
+        return  try {
+            withContext(Dispatchers.IO) {
+                saveMeasurementsToInternalStorage(
+                    context = context,
+                    measurements = uiState.measurements
+                )
+            }
+            true
+        }catch (e: Exception){
+            false
+        }
+    }
+
+    fun loadSavedMeasurements(context: Context) {
+        viewModelScope.launch {
+            uiState = uiState.copy(
+                isLoading = true,
+                message = "Loading saved measurements..."
+            )
+
+            try {
+                val loadedMeasurements = loadMeasurementsFromInternalStorage(context)
+
+                uiState = uiState.copy(
+                    measurements = loadedMeasurements,
+                    isLoading = false,
+                    message = "Loaded ${loadedMeasurements.size} saved measurements."
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    measurements = emptyList(),
+                    isLoading = false,
+                    message = "Could not load saved measurements: ${e.message}"
+                )
+            }
+        }
+
+    }
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -36,137 +356,286 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                ResearchScreen()
+                // Create a viewModel object
+                val viewModel: ResearchViewModel = viewModel()
+                // Draw UI using the viewModel input
+                ResearchScreen(
+                    viewModel = viewModel
+                )
             }
         }
     }
 }
 
+/**
+UI Drawing
+ */
+
 @Composable
-fun ResearchScreen() {
+fun ResearchScreen(
+    viewModel: ResearchViewModel, modifier: Modifier = Modifier
+) { // This function is just for connecting viewModel variable to UI drawing function.
+    // It separates the UI drawing process from viewModel inputs, so the code for drawing is independent
 
-    var sampleId by remember {
+    // Getting viewModel value.
+    val uiState = viewModel.uiState
+    val context = LocalContext.current
+
+    // Plot UI using obtained model values and functions
+    ResearchScreenContent(
+        uiState = uiState,
+        onSampleIdChange = viewModel::updateSampleId,
+        onToggleConnection = viewModel::toggleConnection,
+        onMeasure = {
+            viewModel.addMeasurement(context)
+        },
+        onClear = {
+            viewModel.clearMeasurements(context)
+        },
+        onRemove = {
+            viewModel.removeLastMeasurement(context)
+        },
+        onExportMessage = viewModel::setExportMessage,
+        onLoadSavedMeasurements = {
+            viewModel.loadSavedMeasurements(context)
+        },
+        getCsvText = viewModel::getCsvText
+    )
+
+}
+
+
+@Composable
+fun ResearchScreenContent( // specifically for drawing the UI with viewModel inputs
+    uiState: ResearchUiState,
+    onSampleIdChange: (String) -> Unit,
+    onToggleConnection: () -> Unit,
+    onMeasure: () -> Unit,
+    onRemove: () -> Unit,
+    onClear: () -> Unit,
+    onExportMessage: (String) -> Unit,
+    onLoadSavedMeasurements: () -> Unit,
+    getCsvText: () -> String
+) {
+    /**
+    Create new variables
+     */
+    val context = LocalContext.current
+
+    var pendingCsvText by remember {
         mutableStateOf("")
     }
 
-    var sampleName by remember {
-        mutableStateOf("")
+    LaunchedEffect(Unit) { // load saved data when app screen opens
+        onLoadSavedMeasurements()
     }
 
-    // Dynamic state: Create a variable that starts at 0.0. Remember it so it doesn't reset when the screen redraws.
-    // Make it a State so that every time when the value changes, the UI is triggered to auto update to show the new number.
-    // The by here allows me to use it like a normal variable.
-    var measurementValue by remember {
-        mutableStateOf<Double?>(null)
+    // Specifically for file saving dialog processing
+    val createCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv"),
+        onResult = { uri: Uri? ->
+
+            if (uri != null) {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(pendingCsvText.toByteArray())
+                }
+
+                onExportMessage("CSV exported successfully.")
+            } else {
+                onExportMessage("CSV export cancelled.")
+            }
+        }
+    )
+
+    val latestMeasurement = uiState.measurements.lastOrNull()
+
+    val values = uiState.measurements.map {
+        it.value
     }
 
-    var measurementCount by remember {
-        mutableIntStateOf(0)
+    val meanText = if (values.isNotEmpty()) {
+        "%.3f".format(values.average())
+    } else {
+        "--"
     }
 
-    val deviceStatus = "Connected"
+    val minText = values.minOrNull()?.let {
+        "%.3f".format(it)
+    } ?: "--"
 
+    val maxText = values.maxOrNull()?.let {
+        "%.3f".format(it)
+    } ?: "--"
+
+    /**
+    Drawing UI
+     */
     Column(
         modifier = Modifier
             .padding(16.dp)
             .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Research Measurement App",
+        Text(
+            text = "Research Measurement App",
             fontSize = 26.sp
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        if (uiState.isLoading) {
+            Text("Loading Saved Data...")
+        }
 
-        TextField(
-            value = sampleId, // The display: show the current sampleId value.
-            onValueChange = {
-                sampleId = it // ‘it’ is a special Kotlin keyword that represents the new text that just arrived from the keyboard.
-            },
-            label = {
-                Text("Sample ID") // The label of the text field to guide the input
-            }
-        )
+        if (uiState.message.isNotBlank()) {
+            Text(uiState.message)
+        }
 
         OutlinedTextField(
-            value = sampleName,
-            onValueChange = {
-                sampleName = it
-            },
+            value = uiState.sampleId,
+            onValueChange = onSampleIdChange,
             label = {
-                Text("SampleName")
+                Text("Sample ID")
             },
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Device status: $deviceStatus")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (sampleId.isBlank()) {
+        if (uiState.sampleId.isBlank()) {
             Text("Please enter a sample ID before measuring.")
         }
 
-        Card( // A container that presents the parts inside with a shadow to highlight
+        Text(
+            text = if (uiState.isConnected) {
+                "Device status: Connected"
+            } else {
+                "Device status: Disconnected"
+            }
+        )
+
+        Button(
+            onClick = onToggleConnection,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = if (uiState.isConnected) {
+                    "Disconnect"
+                } else {
+                    "Connect"
+                }
+            )
+        }
+
+        Card(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Current value")
+                Text("Latest value")
 
                 Text(
-                    text = measurementValue?.let { // let: "enter" the curly braces if the safe actually had a value inside.
-                        "%.3f".format(it) // formatted number 'it' refers the measurementValue
-                    } ?: "--", // If measurementValue is not null: format it; Otherwise: show "--"
+                    text = latestMeasurement?.value?.let {
+                        "%.3f".format(it)
+                    } ?: "--",
                     fontSize = 40.sp
                 )
 
-                Text("Measurements: $measurementCount")
+                Text("Measurements: ${uiState.measurements.size}")
+                Text("Mean: $meanText")
+                Text("Min: $minText")
+                Text("Max: $maxText")
             }
         }
 
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onMeasure,
+                enabled = uiState.sampleId.isNotBlank() && uiState.isConnected,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Measure")
+            }
+            Button(
+                onClick = onRemove,
+                enabled = uiState.measurements.isNotEmpty(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Delete Last Measurement")
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onClear,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Clear")
+            }
+
+            Button(
+                onClick = {
+                    pendingCsvText = getCsvText()
+
+                    val filename = if (uiState.sampleId.isNotBlank()) {
+                        "${safeFilename(uiState.sampleId)}_measurements.csv"
+                    } else {
+                        "measurements.csv"
+                    }
+
+                    createCsvLauncher.launch(filename)
+                },
+                enabled = uiState.measurements.isNotEmpty(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Export CSV")
+            }
+        }
+
+
+        if (uiState.exportMessage.isNotBlank()) {
+            Text(uiState.exportMessage)
+        }
+
         Text(
-            text = measurementValue?.toString() ?: "No measurement yet"
+            text = "Measurement History",
+            fontSize = 20.sp
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Measurement Count: $measurementCount")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row (
-            modifier = Modifier.fillMaxWidth(),
-        ){
-            Button(
-                onClick = {
-                    measurementValue = Random.nextDouble(
-                        from = 0.0,
-                        until = 5.0
-                    )
-                    measurementCount = measurementCount + 1
-                },
-                enabled = sampleId.isNotBlank(), // If sampleId is blank, disable the button.
-                modifier = Modifier.weight(1f) // Each button takes an equal share of the row width.
-            ) {
-                Text("Start Measurement")
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(uiState.measurements) { measurement ->
+                MeasurementRow(measurement)
             }
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.width(12.dp))
 
-            Button(
-                onClick = {
-                    measurementValue = null
-                    measurementCount = 0
-                },
-                modifier = Modifier.weight(1f) // Each button takes an equal share of the row width.
-            ) {
-                Text("Reset")
-            }
+@Composable
+// for plotting one measurement data in a row
+fun MeasurementRow(
+    measurement: Measurement,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Sample: ${measurement.sampleId}")
+            Text("Repetition: ${measurement.repetition}")
+            Text("Value: ${"%.3f".format(measurement.value)}")
+            Text("Status: ${measurement.status}")
         }
     }
 }
@@ -176,6 +645,17 @@ fun ResearchScreen() {
 @Composable
 fun ResearchScreenPreview() {
     MaterialTheme {
-        ResearchScreen()
+        val viewModel: ResearchViewModel = viewModel()
+        ResearchScreen(viewModel)
     }
 }
+
+
+
+
+
+
+
+
+
+
