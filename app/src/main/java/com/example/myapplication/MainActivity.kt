@@ -242,10 +242,6 @@ class ResearchViewModel(
         )
     }
 
-    fun getCsvText(): String {
-        return measurementListToCsv(uiState.measurements)
-    }
-
     private fun saveMeasurementsAsync(context: Context) {
         // Switch this block to the IO dispatcher.
         viewModelScope.launch {
@@ -344,7 +340,6 @@ fun ResearchScreen(
         onLoadSavedMeasurements = {
             viewModel.loadSavedMeasurements(context)
         },
-        getCsvText = viewModel::getCsvText
     )
 
 }
@@ -362,7 +357,6 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
     onClear: () -> Unit,
     onExportMessage: (String) -> Unit,
     onLoadSavedMeasurements: () -> Unit,
-    getCsvText: () -> String
 ) {
     /**
     Create new variables
@@ -381,12 +375,12 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
     val createCsvLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv"),
         onResult = { uri: Uri? ->
-
             if (uri != null) {
+                // 2. Generate the CSV text right here when needed
+                val csvText = measurementListToCsv(uiState.measurements)
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    outputStream.write(pendingCsvText.toByteArray())
+                    outputStream.write(csvText.toByteArray())
                 }
-
                 onExportMessage("CSV exported successfully.")
             } else {
                 onExportMessage("CSV export cancelled.")
@@ -434,20 +428,6 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
             Text(uiState.message)
         }
 
-        Text(
-            text = when (uiState.deviceConnectionState) {
-                DeviceConnectionState.CONNECTED -> {
-                    "Device status: Connected"
-                }
-                DeviceConnectionState.CONNECTING -> {
-                    "Device status: Connecting"
-                }
-                else -> {
-                    "Device status: Disconnected"
-                }
-            }
-        )
-
         Button(
             onClick = {
                 // toggle the button function
@@ -467,6 +447,20 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
                 }
             )
         }
+
+        Text(
+            text = when (uiState.deviceConnectionState) {
+                DeviceConnectionState.CONNECTED -> {
+                    "Device status: Connected"
+                }
+                DeviceConnectionState.CONNECTING -> {
+                    "Device status: Connecting"
+                }
+                else -> {
+                    "Device status: Disconnected"
+                }
+            }
+        )
 
         if (uiState.sampleId.isBlank()) {
             Text("Please enter a sample ID before measuring.")
@@ -557,17 +551,14 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
 
             Button(
                 onClick = {
-                    pendingCsvText = getCsvText()
-
                     val filename = if (uiState.sampleId.isNotBlank()) {
                         "${safeFilename(uiState.sampleId)}_measurements.csv"
                     } else {
                         "measurements.csv"
                     }
-
                     createCsvLauncher.launch(filename)
                 },
-                enabled = uiState.measurements.isNotEmpty(),
+                enabled = uiState.measurements.isNotEmpty() && uiState.acquisitionState != AcquisitionState.RECORDING,
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Export CSV")
