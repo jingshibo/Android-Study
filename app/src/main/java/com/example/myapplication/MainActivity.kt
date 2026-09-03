@@ -1,5 +1,6 @@
 package com.example.myapplication
 
+import android.app.Application
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -28,16 +29,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import kotlin.random.Random
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+
 
 /**
 Regular classes
@@ -46,9 +47,13 @@ Regular classes
 //  Create one class that represents the whole screen state, This is useful because the UI can receive one state object.
 data class ResearchUiState(
     val sampleId: String = "",
+    val patientCode: String = "",
+    val sessionName: String = "",
+    val currentPatientId: Long? = null,
+    val currentSessionId: Long? = null,
     val deviceConnectionState: DeviceConnectionState = DeviceConnectionState.DISCONNECTED,
     val acquisitionState: AcquisitionState = AcquisitionState.IDLE,
-    val measurements: List<Measurement> = emptyList(),
+    val measurementEntities: List<MeasurementEntity> = emptyList(),
     val latestValue: Double? = null,
     val isLoading: Boolean = false,
     val exportMessage: String = "",
@@ -102,8 +107,10 @@ fun safeFilename(text: String): String {
 ViewModel class
  */
 class ResearchViewModel(
-    private val measurementRepository: MeasurementRepository = MeasurementRepository()
-) : ViewModel() {
+    application: Application
+) : AndroidViewModel(application) {
+
+    private val measurementRepository = MeasurementRepository(application)
 
     // There is no remember here because this state lives inside the ViewModel.
     // The by keyword lets us use uiState like a normal variable instead of writing uiState.value.
@@ -150,7 +157,7 @@ class ResearchViewModel(
         )
     }
 
-    fun startAcquisition(context: Context) {
+    fun startAcquisition() {
 
         if (uiState.deviceConnectionState != DeviceConnectionState.CONNECTED) {
             uiState = uiState.copy(
@@ -171,7 +178,7 @@ class ResearchViewModel(
 
         viewModelScope.launch {
             while (uiState.acquisitionState == AcquisitionState.RECORDING) { // When `isAcquiring` becomes `false`, the loop finishes.
-                addMeasurement(context)
+                addMeasurement()
                 delay(1000)
             }
         }
@@ -189,80 +196,70 @@ class ResearchViewModel(
         )
     }
 
-    private fun addMeasurement(context: Context) {
+    private fun addMeasurement() {
 
         if (uiState.sampleId.isBlank() || uiState.deviceConnectionState == DeviceConnectionState.DISCONNECTED) {
             return
         }
 
+        val currentSessionId = uiState.currentSessionId
+
         val repetitionForThisSample =
-            uiState.measurements.count {
-                it.sampleId == uiState.sampleId
+            uiState.measurementEntities.count {
+                it.sessionId == currentSessionId
             } + 1
 
         val newMeasurement = measurementRepository.createSimulatedMeasurement(
-            sampleId = uiState.sampleId,
+            sessionId = currentSessionId,
             repetition = repetitionForThisSample
         )
 
-        val updatedMeasurements = uiState.measurements + newMeasurement
-
-        uiState = uiState.copy(
-            measurements = updatedMeasurements, // old list + new item = new list. It does not change the old measurements list but reassigned it.
-            latestValue = newMeasurement.value,
-            exportMessage = ""
-        )
-
-        // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
-
-    }
-
-    fun removeLastMeasurement(context: Context) {
-        uiState = uiState.copy(
-            measurements = uiState.measurements.dropLast(1),
-            exportMessage = ""
-        )
-        // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
-    }
-
-    fun clearMeasurements(context: Context) {
-        uiState = uiState.copy(
-            measurements = emptyList(), // replace measurements with a new empty list
-            exportMessage = ""
-        )
-        // Start a auto data saving coroutine tied to this ViewModel.
-        saveMeasurementsAsync(context)
-    }
-
-    fun setExportMessage(exportMessage: String) {
-        uiState = uiState.copy(
-            exportMessage = exportMessage
-        )
-    }
-
-    private fun saveMeasurementsAsync(context: Context) {
-        // Switch this block to the IO dispatcher.
         viewModelScope.launch {
             try {
-                measurementRepository.saveMeasurementsToInternal(
-                    context = context,
-                    measurements = uiState.measurements
-                )
+                measurementRepository.insertMeasurement(newMeasurement)
+
+                val updatedMeasurements =
+                    measurementRepository.getMeasurementsForSession(currentSessionId)
 
                 uiState = uiState.copy(
-                    message = "Measurements auto-saved"
+                    measurementEntities = updatedMeasurements,
+                    latestValue = newMeasurement.value,
+                    message = "Measurement saved to database",
+                    exportMessage = ""
                 )
             } catch (e: Exception) {
                 uiState = uiState.copy(
-                    message = "Auto-save failed"
+                    message = "Database save failed"
                 )
             }
         }
     }
 
-    fun loadSavedMeasurements(context: Context) {
+    fun removeLastMeasurement() {
+        uiState = uiState.copy(
+            measurementEntities = uiState.measurementEntities.dropLast(1),
+            exportMessage = ""
+        )
+    }
+
+    fun clearMeasurements() {
+        viewModelScope.launch {
+            try {
+                measurementRepository.deleteMeasurementsForSession(uiState.currentSessionId)
+
+                uiState = uiState.copy(
+                    measurementEntities = emptyList(),
+                    message = "All measurements deleted for current session"
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    message = "Could not delete measurements"
+                )
+            }
+        }
+    }
+
+    fun loadSavedMeasurements() {
         viewModelScope.launch {
             uiState = uiState.copy(
                 isLoading = true,
@@ -270,10 +267,10 @@ class ResearchViewModel(
             )
 
             try {
-                val loadedMeasurements = measurementRepository.loadMeasurementsFromInternal(context)
+                val loadedMeasurements = measurementRepository.getMeasurementsForSession(uiState.currentSessionId)
 
                 uiState = uiState.copy(
-                    measurements = loadedMeasurements,
+                    measurementEntities = loadedMeasurements,
                     isLoading = false,
                     message = "Loaded ${loadedMeasurements.size} saved measurements."
                 )
@@ -284,7 +281,6 @@ class ResearchViewModel(
                 )
             }
         }
-
     }
 }
 
@@ -318,7 +314,6 @@ fun ResearchScreen(
 
     // Getting viewModel value.
     val uiState = viewModel.uiState
-    val context = LocalContext.current
 
     // Plot UI using obtained model values and functions
     ResearchScreenContent(
@@ -326,27 +321,19 @@ fun ResearchScreen(
         onSampleIdChange = viewModel::updateSampleId,
         onConnect = viewModel::connectDevice,
         onDisconnect = viewModel::disconnectDevice,
-        startAcquisition = {
-            viewModel.startAcquisition(context)
-        },
+        startAcquisition = viewModel::startAcquisition,
         stopAcquisition = viewModel::stopAcquisition,
-        onClear = {
-            viewModel.clearMeasurements(context)
-        },
-        onRemove = {
-            viewModel.removeLastMeasurement(context)
-        },
-        onExportMessage = viewModel::setExportMessage,
-        onLoadSavedMeasurements = {
-            viewModel.loadSavedMeasurements(context)
-        },
+        onClear = viewModel::clearMeasurements,
+        onRemove = viewModel::removeLastMeasurement,
+        onLoadSavedMeasurements = viewModel::loadSavedMeasurements,
     )
 
 }
 
 
 @Composable
-fun ResearchScreenContent( // specifically for drawing the UI with viewModel inputs
+fun ResearchScreenContent(
+    // specifically for drawing the UI with viewModel inputs
     uiState: ResearchUiState,
     onSampleIdChange: (String) -> Unit,
     onConnect: () -> Unit,
@@ -355,7 +342,6 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
     stopAcquisition: () -> Unit,
     onRemove: () -> Unit,
     onClear: () -> Unit,
-    onExportMessage: (String) -> Unit,
     onLoadSavedMeasurements: () -> Unit,
 ) {
     /**
@@ -377,18 +363,18 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
         onResult = { uri: Uri? ->
             if (uri != null) {
                 // 2. Generate the CSV text right here when needed
-                val csvText = measurementListToCsv(uiState.measurements)
+                val csvText = measurementListToCsv(uiState.measurementEntities)
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     outputStream.write(csvText.toByteArray())
                 }
-                onExportMessage("CSV exported successfully.")
+                Toast.makeText(context, "CSV exported successfully.", Toast.LENGTH_SHORT).show()
             } else {
-                onExportMessage("CSV export cancelled.")
+                Toast.makeText(context, "CSV export cancelled.", Toast.LENGTH_SHORT).show()
             }
         }
     )
 
-    val values = uiState.measurements.map {
+    val values = uiState.measurementEntities.map {
         it.value
     }
 
@@ -453,9 +439,11 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
                 DeviceConnectionState.CONNECTED -> {
                     "Device status: Connected"
                 }
+
                 DeviceConnectionState.CONNECTING -> {
                     "Device status: Connecting"
                 }
+
                 else -> {
                     "Device status: Disconnected"
                 }
@@ -491,18 +479,21 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
                     fontSize = 40.sp
                 )
 
-                val acquisitionStatus = if (uiState.acquisitionState == AcquisitionState.RECORDING) {
-                    "Recording"
-                } else {
-                    "Stopped"
-                }
+                val acquisitionStatus =
+                    if (uiState.acquisitionState == AcquisitionState.RECORDING) {
+                        "Recording"
+                    } else {
+                        "Stopped"
+                    }
 
                 Row(
-                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Acquisition Status: $acquisitionStatus")
-                    Text("Measurement Count: ${uiState.measurements.size}")
+                    Text("Measurement Count: ${uiState.measurementEntities.size}")
                     Text("Mean: $meanText")
                     Text("Min: $minText")
                     Text("Max: $maxText")
@@ -526,12 +517,13 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
                 enabled = uiState.sampleId.isNotBlank() && uiState.deviceConnectionState == DeviceConnectionState.CONNECTED,
                 modifier = Modifier.weight(1f)
             ) {
-                val buttonText = if (uiState.acquisitionState == AcquisitionState.RECORDING) "Stop Acquisition" else "Start Acquisition"
+                val buttonText =
+                    if (uiState.acquisitionState == AcquisitionState.RECORDING) "Stop Acquisition" else "Start Acquisition"
                 Text(buttonText)
             }
             Button(
                 onClick = onRemove,
-                enabled = uiState.measurements.isNotEmpty(),
+                enabled = uiState.measurementEntities.isNotEmpty(),
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Delete Last Measurement")
@@ -544,7 +536,8 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
         ) {
             Button(
                 onClick = onClear,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                enabled = uiState.acquisitionState != AcquisitionState.RECORDING
             ) {
                 Text("Clear")
             }
@@ -558,7 +551,7 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
                     }
                     createCsvLauncher.launch(filename)
                 },
-                enabled = uiState.measurements.isNotEmpty() && uiState.acquisitionState != AcquisitionState.RECORDING,
+                enabled = uiState.measurementEntities.isNotEmpty() && uiState.acquisitionState != AcquisitionState.RECORDING,
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Export CSV")
@@ -578,7 +571,7 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(uiState.measurements) { measurement ->
+            items(uiState.measurementEntities) { measurement ->
                 MeasurementRow(measurement)
             }
         }
@@ -589,7 +582,7 @@ fun ResearchScreenContent( // specifically for drawing the UI with viewModel inp
 @Composable
 // for plotting one measurement data in a row
 fun MeasurementRow(
-    measurement: Measurement,
+    measurementEntity: MeasurementEntity,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -601,10 +594,10 @@ fun MeasurementRow(
                 .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Sample: ${measurement.sampleId}")
-            Text("Repetition: ${measurement.repetition}")
-            Text("Value: ${"%.3f".format(measurement.value)}")
-            Text("Status: ${measurement.status}")
+            Text("Session: ${measurementEntity.sessionId}")
+            Text("Repetition: ${measurementEntity.repetition}")
+            Text("Value: ${"%.3f".format(measurementEntity.value)}")
+            Text("Status: ${measurementEntity.status}")
         }
     }
 }
@@ -618,13 +611,3 @@ fun ResearchScreenPreview() {
         ResearchScreen(viewModel)
     }
 }
-
-
-
-
-
-
-
-
-
-

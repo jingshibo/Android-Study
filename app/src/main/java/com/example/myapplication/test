@@ -1,236 +1,642 @@
 package com.example.myapplication
 
-// Imports bring in the necessary tools and libraries for your app to work.
+import android.app.Application
+import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import com.example.myapplication.ui.theme.MyApplicationTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import android.widget.Toast
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.lifecycle.AndroidViewModel
 
 
 /**
- * MainActivity is the entry point of your Android application.
- * It inherits from ComponentActivity, which provides the base logic for a modern Android screen.
+Regular classes
  */
-class MainActivity : ComponentActivity() { // MainActivity starts the screen.
 
-    /**
-     * onCreate is the first method called when the Activity is created.
-     * This is where you initialize your UI and setup the app's state.
-     */
+//  Create one class that represents the whole screen state, This is useful because the UI can receive one state object.
+data class ResearchUiState(
+    val sampleId: String = "",
+    val deviceConnectionState: DeviceConnectionState = DeviceConnectionState.DISCONNECTED,
+    val acquisitionState: AcquisitionState = AcquisitionState.IDLE,
+    val measurementEntities: List<MeasurementEntity> = emptyList(),
+    val latestValue: Double? = null,
+    val isLoading: Boolean = false,
+    val exportMessage: String = "",
+    val message: String = ""
+)
+
+enum class DeviceConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    ERROR
+}
+
+enum class AcquisitionState {
+    IDLE,
+    RECORDING,
+    STOPPED,
+    ERROR
+}
+
+fun getDeviceStatusText(
+    state: DeviceConnectionState
+): String {
+    return when (state) {
+        DeviceConnectionState.DISCONNECTED -> "Device disconnected"
+        DeviceConnectionState.CONNECTING -> "Connecting to device..."
+        DeviceConnectionState.CONNECTED -> "Device connected"
+        DeviceConnectionState.ERROR -> "Device error"
+    }
+}
+
+fun getAcquisitionStatusText(
+    state: AcquisitionState
+): String {
+    return when (state) {
+        AcquisitionState.IDLE -> "Ready to start"
+        AcquisitionState.RECORDING -> "Recording"
+        AcquisitionState.STOPPED -> "Recording stopped"
+        AcquisitionState.ERROR -> "Acquisition error"
+    }
+}
+
+// Cleans a string to make it safe for use as a file name.
+fun safeFilename(text: String): String {
+    return text
+        .trim()
+        .replace(Regex("[^A-Za-z0-9_-]"), "_")
+}
+
+/**
+ViewModel class
+ */
+class ResearchViewModel(
+    application: Application
+) : AndroidViewModel(application) {
+
+    private val measurementRepository = MeasurementRepository(application)
+
+    // There is no remember here because this state lives inside the ViewModel.
+    // The by keyword lets us use uiState like a normal variable instead of writing uiState.value.
+    var uiState by mutableStateOf(ResearchUiState())
+        private set
+
+    fun updateSampleId(newSampleId: String) {
+        uiState = uiState.copy(
+            sampleId = newSampleId,
+            exportMessage = ""
+        )
+    }
+
+    fun connectDevice() {
+        // This prevents starting two acquisition loops at the same time.
+        if (uiState.deviceConnectionState == DeviceConnectionState.CONNECTING) {
+            return
+        }
+
+        uiState = uiState.copy(
+            deviceConnectionState = DeviceConnectionState.CONNECTING,
+            message = "Connecting to device..."
+        )
+
+        viewModelScope.launch {
+            delay(1000)
+
+            uiState = uiState.copy(
+                deviceConnectionState = DeviceConnectionState.CONNECTED,
+                message = "Device connected"
+            )
+        }
+    }
+
+    fun disconnectDevice() {
+        if (uiState.acquisitionState == AcquisitionState.RECORDING) {
+            stopAcquisition()
+        }
+
+        uiState = uiState.copy(
+            deviceConnectionState = DeviceConnectionState.DISCONNECTED,
+            acquisitionState = AcquisitionState.IDLE,
+            message = "Device disconnected"
+        )
+    }
+
+    fun startAcquisition() {
+
+        if (uiState.deviceConnectionState != DeviceConnectionState.CONNECTED) {
+            uiState = uiState.copy(
+                message = "Connect device before starting acquisition"
+            )
+            return
+        }
+
+        // This prevents starting two acquisition loops at the same time.
+        if (uiState.acquisitionState == AcquisitionState.RECORDING) {
+            return
+        }
+
+        uiState = uiState.copy(
+            acquisitionState = AcquisitionState.RECORDING,
+            message = "Acquisition started"
+        )
+
+        viewModelScope.launch {
+            while (uiState.acquisitionState == AcquisitionState.RECORDING) { // When `isAcquiring` becomes `false`, the loop finishes.
+                addMeasurement()
+                delay(1000)
+            }
+        }
+    }
+
+    fun stopAcquisition() {
+        // If the app is already idle or stopped, pressing Stop should do nothing.
+        if (uiState.acquisitionState != AcquisitionState.RECORDING) {
+            return
+        }
+
+        uiState = uiState.copy(
+            acquisitionState = AcquisitionState.STOPPED,
+            message = "Acquisition stopped"
+        )
+    }
+
+    private fun addMeasurement() {
+
+        if (uiState.sampleId.isBlank() || uiState.deviceConnectionState == DeviceConnectionState.DISCONNECTED) {
+            return
+        }
+
+        val repetitionForThisSample =
+            uiState.measurementEntities.count {
+                it.sampleId == uiState.sampleId
+            } + 1
+
+        val newMeasurement = measurementRepository.createSimulatedMeasurement(
+            sampleId = uiState.sampleId,
+            repetition = repetitionForThisSample
+        )
+
+        viewModelScope.launch {
+            try {
+                measurementRepository.insertMeasurement(newMeasurement)
+
+                val updatedMeasurements =
+                    measurementRepository.getAllMeasurements()
+
+                uiState = uiState.copy(
+                    measurementEntities = updatedMeasurements,
+                    latestValue = newMeasurement.value,
+                    message = "Measurement saved to database",
+                    exportMessage = ""
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    message = "Database save failed"
+                )
+            }
+        }
+
+//        // Start an auto data saving coroutine tied to this ViewModel.
+//        saveMeasurementsAsync()
+    }
+
+    fun removeLastMeasurement() {
+        uiState = uiState.copy(
+            measurementEntities = uiState.measurementEntities.dropLast(1),
+            exportMessage = ""
+        )
+//        // Start an auto data saving coroutine tied to this ViewModel.
+//        saveMeasurementsAsync()
+    }
+
+    fun clearMeasurements() {
+        viewModelScope.launch {
+            try {
+                measurementRepository.deleteAllMeasurements()
+
+                uiState = uiState.copy(
+                    measurementEntities = emptyList(),
+                    message = "All measurements deleted"
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    message = "Could not delete measurements"
+                )
+            }
+        }
+    }
+
+
+//    private fun saveMeasurementsAsync() {
+//        // Switch this block to the IO dispatcher.
+//        viewModelScope.launch {
+//            try {
+//                measurementRepository.saveMeasurementsToInternal(
+//                    measurements = uiState.measurements
+//                )
+//
+//                uiState = uiState.copy(
+//                    message = "Measurements auto-saved"
+//                )
+//            } catch (e: Exception) {
+//                uiState = uiState.copy(
+//                    message = "Auto-save failed"
+//                )
+//            }
+//        }
+//    }
+
+    fun loadSavedMeasurements() {
+        viewModelScope.launch {
+            uiState = uiState.copy(
+                isLoading = true,
+                message = "Loading saved measurements..."
+            )
+
+            try {
+                val loadedMeasurements = measurementRepository.getAllMeasurements()
+
+                uiState = uiState.copy(
+                    measurementEntities = loadedMeasurements,
+                    isLoading = false,
+                    message = "Loaded ${loadedMeasurements.size} saved measurements."
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    isLoading = false,
+                    message = "Could not load saved measurements: ${e.message}"
+                )
+            }
+        }
+
+    }
+}
+
+class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // enableEdgeToEdge makes the app content draw behind system bars (status bar and navigation bar).
-        enableEdgeToEdge()
+        setContent {
+            MaterialTheme {
+                // Create a viewModel object
+                val viewModel: ResearchViewModel = viewModel()
+                // Draw UI using the viewModel input
+                ResearchScreen(
+                    viewModel = viewModel
+                )
+            }
+        }
+    }
+}
 
-        // setContent is where you start the compose UI.
-        setContent { // UI goes here
-            // MyApplicationTheme applies your app's custom colors, typography, and shapes.
-            MyApplicationTheme {
-                // Scaffold is a parent container, but it is the "Big Boss" of layout containers!
-                // It is designed to manage the entire screen structure according to Material Design rules.
-                Scaffold(modifier = Modifier.fillMaxSize(),) { innerPadding ->
-                    // We call our Greeting composable function and pass it a name and the padding from Scaffold.
-                    Column {
-                        //1. Modifier: Start with the blank "identity" object.
-                        //2. .padding(10.dp): Create a new object that adds padding instructions.
-                        //3. .fillMaxWidth(): Create another new object that adds width instructions.
-                        Greeting(
-                            name = "Android",
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                        // It is a good practice to pass the modifier attribute(s) along with the modifier
-                        // from the parent composable. Update the modifier parameter as follows:
-                        ResearchScreen(
-                            "002",
-                            value = 2.35,
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                        GreetingImage(
-                            message = stringResource(R.string.happy_birthday_sam),
-                            from = "From Emma"
-                        )
-                    }
+/**
+UI Drawing
+ */
 
+@Composable
+fun ResearchScreen(
+    viewModel: ResearchViewModel, modifier: Modifier = Modifier
+) { // This function is just for connecting viewModel variable to UI drawing function.
+    // It separates the UI drawing process from viewModel inputs, so the code for drawing is independent
+
+    // Getting viewModel value.
+    val uiState = viewModel.uiState
+    val context = LocalContext.current
+
+    // Plot UI using obtained model values and functions
+    ResearchScreenContent(
+        uiState = uiState,
+        onSampleIdChange = viewModel::updateSampleId,
+        onConnect = viewModel::connectDevice,
+        onDisconnect = viewModel::disconnectDevice,
+        startAcquisition = viewModel::startAcquisition,
+        stopAcquisition = viewModel::stopAcquisition,
+        onClear = viewModel::clearMeasurements,
+        onRemove = viewModel::removeLastMeasurement,
+        onLoadSavedMeasurements = viewModel::loadSavedMeasurements,
+    )
+
+}
+
+
+@Composable
+fun ResearchScreenContent(
+    // specifically for drawing the UI with viewModel inputs
+    uiState: ResearchUiState,
+    onSampleIdChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    startAcquisition: () -> Unit,
+    stopAcquisition: () -> Unit,
+    onRemove: () -> Unit,
+    onClear: () -> Unit,
+    onLoadSavedMeasurements: () -> Unit,
+) {
+    /**
+    Create new variables
+     */
+    val context = LocalContext.current
+
+    var pendingCsvText by remember {
+        mutableStateOf("")
+    }
+
+    LaunchedEffect(Unit) { // load saved data when app screen opens
+        onLoadSavedMeasurements()
+    }
+
+    // Specifically for file saving dialog processing
+    val createCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv"),
+        onResult = { uri: Uri? ->
+            if (uri != null) {
+                // 2. Generate the CSV text right here when needed
+                val csvText = measurementListToCsv(uiState.measurementEntities)
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(csvText.toByteArray())
+                }
+                Toast.makeText(context, "CSV exported successfully.", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "CSV export cancelled.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    val values = uiState.measurementEntities.map {
+        it.value
+    }
+
+    val meanText = if (values.isNotEmpty()) {
+        "%.3f".format(values.average())
+    } else {
+        "--"
+    }
+
+    val minText = values.minOrNull()?.let {
+        "%.3f".format(it)
+    } ?: "--"
+
+    val maxText = values.maxOrNull()?.let {
+        "%.3f".format(it)
+    } ?: "--"
+
+    /**
+    Drawing UI
+     */
+    Column(
+        modifier = Modifier
+            .padding(16.dp)
+            .fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "Research Measurement App",
+            fontSize = 26.sp
+        )
+
+        if (uiState.isLoading) {
+            Text("Loading Saved Data...")
+        }
+
+        if (uiState.message.isNotBlank()) {
+            Text(uiState.message)
+        }
+
+        Button(
+            onClick = {
+                // toggle the button function
+                when {
+                    uiState.deviceConnectionState == DeviceConnectionState.CONNECTED -> onDisconnect()
+                    else -> onConnect()
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = uiState.deviceConnectionState != DeviceConnectionState.CONNECTING,
+        ) {
+            Text(
+                text = if (uiState.deviceConnectionState == DeviceConnectionState.CONNECTED) {
+                    "Disconnect"
+                } else {
+                    "Connect"
+                }
+            )
+        }
+
+        Text(
+            text = when (uiState.deviceConnectionState) {
+                DeviceConnectionState.CONNECTED -> {
+                    "Device status: Connected"
+                }
+
+                DeviceConnectionState.CONNECTING -> {
+                    "Device status: Connecting"
+                }
+
+                else -> {
+                    "Device status: Disconnected"
                 }
             }
-        }
-    }
-}
-
-/**
- * A composable function is a Kotlin function that describes UI.
- * This one displays a "Hello" text message.
- */
-@Composable // @Composable means this function can be used by Compose to create UI.
-// All functions marked with the @Composable annotation can be called from the setContent() function or from other Composable functions.
-// Note: @Composable function names are capitalized and they can't return anything.
-fun Greeting(name: String, modifier: Modifier = Modifier) { // Modifier is a default object with all parameters to be blank
-    // Surface provides a background layer (like a sheet of paper) for its children.
-    Surface(color = Color.Cyan, modifier = modifier) { // Trailing Lambda: curly braces are used for the last 'content' parameter.
-        // Note: The following UI components are technically an input parameter of the Surface function,
-        // moved into curly braces using Trailing Lambda Syntax for better readability.
-        Row(
-            modifier = Modifier.padding(20.dp) // Use a NEW modifier for internal spacing
-        ) { // Row contains multiple children UI elements placed horizontally
-            Text(
-                text = name,
-                fontSize = 100.sp,
-                lineHeight = 116.sp,
-            )
-            Text( // Text is a common Compose component used for displaying text on the screen.
-                text = "Hello $name!",
-                modifier = modifier.padding(24.dp) // The modifier put 16 dp of padding around the column.
-            )
-        }
-    }
-}
-
-/**
- * A Preview function allows you to see how your UI looks in the Android Studio Design tab
- * without having to run the app on a physical device or emulator.
- */
-@Preview(showBackground = true) // Add a background to your composable preview.
-@Composable
-// To enable a preview of a composable, annotate with @Composable and @Preview.
-// The @Preview annotation tells Android Studio that this composable should be shown in the design view.
-fun GreetingPreview() {
-    MyApplicationTheme {
-        Greeting("Shibo")
-    }
-}
-
-
-@Composable
-fun ResearchScreen(ID: String, value: Double, modifier: Modifier = Modifier) {
-    val context =
-        LocalContext.current // LocalContext.current "grabs" the current environment information
-
-    // Column, Row, Surface and Box composables often act as parent UI containers to help arrange the layout.
-    Column( // Column contains multiple children UI elements placed vertically
-        // 1. Position inside the Column
-        verticalArrangement = Arrangement.Center,       // Centers children vertically
-
-        // 2. Define the layout of the Column. This setting would apply to all its children components
-        modifier = modifier
-            .height(300.dp)    // Give it a specific height (e.g., 300dp)
-            .padding(50.dp)    // Add some breathing room around the edges
-            .background(Color.LightGray) // Optional: add color to "see"
-    ) {
-        Text("Research Measurement App", fontSize = 25.sp)
-        Text(
-            text = ID,
-            lineHeight = 50.sp,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.align(Alignment.CenterHorizontally) // <--- Individual
         )
-        Text("Current value: $value")
-        Button(
-            onClick = { // When the user clicks the button, run the code inside onClick.
-                println("Button clicked")
-                // This shows a small popup message at the bottom of the phone screen
-                Toast.makeText(context, "Measurement Started!", Toast.LENGTH_SHORT).show()
+
+        if (uiState.sampleId.isBlank()) {
+            Text("Please enter a sample ID before measuring.")
+        }
+
+        OutlinedTextField(
+            value = uiState.sampleId,
+            onValueChange = onSampleIdChange,
+            label = {
+                Text("Sample ID")
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Latest value: ")
+
+                Text(
+                    text = uiState.latestValue?.let {
+                        "%.3f".format(it)
+                    } ?: "--",
+                    fontSize = 40.sp
+                )
+
+                val acquisitionStatus =
+                    if (uiState.acquisitionState == AcquisitionState.RECORDING) {
+                        "Recording"
+                    } else {
+                        "Stopped"
+                    }
+
+                Row(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Acquisition Status: $acquisitionStatus")
+                    Text("Measurement Count: ${uiState.measurementEntities.size}")
+                    Text("Mean: $meanText")
+                    Text("Min: $minText")
+                    Text("Max: $maxText")
+                }
+
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = {
+                    // toggle the button function
+                    when {
+                        uiState.acquisitionState == AcquisitionState.RECORDING -> stopAcquisition()
+                        else -> startAcquisition()
+                    }
+                },
+                enabled = uiState.sampleId.isNotBlank() && uiState.deviceConnectionState == DeviceConnectionState.CONNECTED,
+                modifier = Modifier.weight(1f)
+            ) {
+                val buttonText =
+                    if (uiState.acquisitionState == AcquisitionState.RECORDING) "Stop Acquisition" else "Start Acquisition"
+                Text(buttonText)
+            }
+            Button(
+                onClick = onRemove,
+                enabled = uiState.measurementEntities.isNotEmpty(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Delete Last Measurement")
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onClear,
+                modifier = Modifier.weight(1f),
+                enabled = uiState.acquisitionState != AcquisitionState.RECORDING
+            ) {
+                Text("Clear")
             }
 
+            Button(
+                onClick = {
+                    val filename = if (uiState.sampleId.isNotBlank()) {
+                        "${safeFilename(uiState.sampleId)}_measurements.csv"
+                    } else {
+                        "measurements.csv"
+                    }
+                    createCsvLauncher.launch(filename)
+                },
+                enabled = uiState.measurementEntities.isNotEmpty() && uiState.acquisitionState != AcquisitionState.RECORDING,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Export CSV")
+            }
+        }
+
+
+        if (uiState.exportMessage.isNotBlank()) {
+            Text(uiState.exportMessage)
+        }
+
+        Text(
+            text = "Measurement History",
+            fontSize = 20.sp
+        )
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Start Measurement") // Display the text “Start Measurement” inside the button.
+            items(uiState.measurementEntities) { measurement ->
+                MeasurementRow(measurement)
+            }
         }
     }
-
 }
 
 
-@Preview(showBackground = true) // Add a background to your composable preview.
 @Composable
-// To enable a preview of a composable, annotate with @Composable and @Preview.
-// The @Preview annotation tells Android Studio that this composable should be shown in the design view.
-fun ResearchScreenPreview() {
-    ResearchScreen(ID = "002", value = 2.35)
-}
-
-
-
-@Composable
-fun GreetingText(message: String, from: String, modifier: Modifier = Modifier) {
-    Column(
-        verticalArrangement = Arrangement.Center,
-        modifier = modifier
+// for plotting one measurement data in a row
+fun MeasurementRow(
+    measurementEntity: MeasurementEntity,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(
-            text = message,
-            fontSize = 100.sp,
-            lineHeight = 116.sp,
-            textAlign = TextAlign.Center
-        )
-        Text(
-            text = from,
-            fontSize = 36.sp,
+        Row(
             modifier = Modifier
-                .padding(16.dp)
-                .align(alignment = Alignment.End)
-        )
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Sample: ${measurementEntity.sampleId}")
+            Text("Repetition: ${measurementEntity.repetition}")
+            Text("Value: ${"%.3f".format(measurementEntity.value)}")
+            Text("Status: ${measurementEntity.status}")
+        }
     }
 }
 
-
-@Composable
-fun GreetingImage(message: String, from: String, modifier: Modifier = Modifier) {
-    // R class is an automatically generated class that contains all resources' ID (usually filename)
-    val image = painterResource(R.drawable.androidparty) // drawable.androidparty is the resource directory
-    // Box stacks items Front to Back (like a stack of photos)
-    Box(modifier) {
-        Image( // Put image down first
-            painter = image,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            alpha = 0.5F,
-            modifier = Modifier
-                .fillMaxSize()
-        )
-        GreetingText( // Put the text on top of the image
-            message = message,
-            from = from,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(8.dp)
-        )
-    }
-}
 
 @Preview(showBackground = true)
 @Composable
-fun BirthdayCardPreview() {
-    GreetingImage(
-        message = "Happy Birthday Sam!",
-        from = "From Emma"
-    )
+fun ResearchScreenPreview() {
+    MaterialTheme {
+        val viewModel: ResearchViewModel = viewModel()
+        ResearchScreen(viewModel)
+    }
 }
+
+
+
+
+
+
+
+
+
+
