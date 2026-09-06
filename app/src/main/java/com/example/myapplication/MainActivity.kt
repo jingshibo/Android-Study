@@ -30,8 +30,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewModelScope
-import kotlin.random.Random
-import android.content.Context
 import android.widget.Toast
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.launch
@@ -96,12 +94,7 @@ fun getAcquisitionStatusText(
     }
 }
 
-// Cleans a string to make it safe for use as a file name.
-fun safeFilename(text: String): String {
-    return text
-        .trim()
-        .replace(Regex("[^A-Za-z0-9_-]"), "_")
-}
+
 
 /**
 ViewModel class
@@ -120,6 +113,8 @@ class ResearchViewModel(
     fun updateSampleId(newSampleId: String) {
         uiState = uiState.copy(
             sampleId = newSampleId,
+            currentSessionId = null,
+            measurementEntities = emptyList(),
             exportMessage = ""
         )
     }
@@ -166,6 +161,13 @@ class ResearchViewModel(
             return
         }
 
+        if (uiState.sampleId.isBlank()) {
+            uiState = uiState.copy(
+                message = "Please enter a sample ID first"
+            )
+            return
+        }
+
         // This prevents starting two acquisition loops at the same time.
         if (uiState.acquisitionState == AcquisitionState.RECORDING) {
             return
@@ -177,9 +179,69 @@ class ResearchViewModel(
         )
 
         viewModelScope.launch {
-            while (uiState.acquisitionState == AcquisitionState.RECORDING) { // When `isAcquiring` becomes `false`, the loop finishes.
-                addMeasurement()
-                delay(1000)
+            try {
+                if (uiState.currentSessionId == null) {
+                    val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault()).format(java.util.Date())
+
+                    // 1. Check if patient exists and notify user
+                    val existingPatient = measurementRepository.getPatientByCode(uiState.sampleId)
+                    val (patientId, patientNotice) = if (existingPatient != null) {
+                        Pair(
+                            existingPatient.patient_id,
+                            "Notice: Patient '${uiState.sampleId}' found in database."
+                        )
+                    } else {
+                        val newPatientId = measurementRepository.insertPatient(
+                            PatientEntity(patient_code = uiState.sampleId)
+                        )
+                        Pair(
+                            newPatientId,
+                            "New patient '${uiState.sampleId}' created."
+                        )
+                    }
+
+                    // 2. Check if session exists and notify user
+                    val existingSession = measurementRepository.getSessionByPatientDeviceDay(
+                        patientId = patientId,
+                        deviceId = 1L,
+                        recordingDay = today
+                    )
+
+                    val (sessionId, sessionNotice) = if (existingSession != null) {
+                        Pair(
+                            existingSession.session_id,
+                            "Session for '${uiState.sampleId}' on $today already exists. Reusing session."
+                        )
+                    } else {
+                        val newId = measurementRepository.createSession(
+                            SessionEntity(
+                                patient_id = patientId,
+                                recording_day = today,
+                                notes = "Session ${uiState.sampleId}"
+                            )
+                        )
+                        Pair(
+                            newId,
+                            "New session created for '${uiState.sampleId}' on $today."
+                        )
+                    }
+
+                    uiState = uiState.copy(
+                        currentPatientId = patientId,
+                        currentSessionId = sessionId,
+                        message = "$patientNotice $sessionNotice"
+                    )
+                }
+
+                while (uiState.acquisitionState == AcquisitionState.RECORDING) { // When `isAcquiring` becomes `false`, the loop finishes.
+                    addMeasurement()
+                    delay(1000)
+                }
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    message = "Failed to create session: ${e.message}",
+                    acquisitionState = AcquisitionState.IDLE
+                )
             }
         }
     }
@@ -202,16 +264,19 @@ class ResearchViewModel(
             return
         }
 
-        val currentSessionId = uiState.currentSessionId
+        val currentSessionId = uiState.currentSessionId ?: return
 
-        val repetitionForThisSample =
+        val countForThisSession =
             uiState.measurementEntities.count {
-                it.sessionId == currentSessionId
+                it.session_id == currentSessionId
             } + 1
 
-        val newMeasurement = measurementRepository.createSimulatedMeasurement(
+        val newMeasurement = MeasurementSimulator.createSimulatedMeasurementAndSave(
+            context = getApplication(),
             sessionId = currentSessionId,
-            repetition = repetitionForThisSample
+            recordingIndex = countForThisSession,
+            repeatIndex = 1,
+            fileIndex = countForThisSession
         )
 
         viewModelScope.launch {
@@ -223,7 +288,6 @@ class ResearchViewModel(
 
                 uiState = uiState.copy(
                     measurementEntities = updatedMeasurements,
-                    latestValue = newMeasurement.value,
                     message = "Measurement saved to database",
                     exportMessage = ""
                 )
@@ -243,9 +307,10 @@ class ResearchViewModel(
     }
 
     fun clearMeasurements() {
+        val currentSessionId = uiState.currentSessionId ?: return
         viewModelScope.launch {
             try {
-                measurementRepository.deleteMeasurementsForSession(uiState.currentSessionId)
+                measurementRepository.deleteMeasurementsForSession(currentSessionId)
 
                 uiState = uiState.copy(
                     measurementEntities = emptyList(),
@@ -260,6 +325,7 @@ class ResearchViewModel(
     }
 
     fun loadSavedMeasurements() {
+        val currentSessionId = uiState.currentSessionId ?: return
         viewModelScope.launch {
             uiState = uiState.copy(
                 isLoading = true,
@@ -267,7 +333,7 @@ class ResearchViewModel(
             )
 
             try {
-                val loadedMeasurements = measurementRepository.getMeasurementsForSession(uiState.currentSessionId)
+                val loadedMeasurements = measurementRepository.getMeasurementsForSession(currentSessionId)
 
                 uiState = uiState.copy(
                     measurementEntities = loadedMeasurements,
@@ -278,6 +344,57 @@ class ResearchViewModel(
                 uiState = uiState.copy(
                     isLoading = false,
                     message = "Could not load saved measurements: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /** Transfers measurement files from sensor device to tablet app safely checking for duplicates. */
+    fun transferFilesFromSensor() {
+        val currentSessionId = uiState.currentSessionId
+        if (currentSessionId == null) {
+            uiState = uiState.copy(message = "Please start or select a session first.")
+            return
+        }
+
+        if (uiState.deviceConnectionState != DeviceConnectionState.CONNECTED) {
+            uiState = uiState.copy(message = "Connect device before transferring files.")
+            return
+        }
+
+        viewModelScope.launch {
+            uiState = uiState.copy(
+                isLoading = true,
+                message = "Connecting to Bluetooth sensor..."
+            )
+
+            try {
+                val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault()).format(java.util.Date())
+
+                val transferredList = MeasurementSimulator.simulateSessionTransferFromSensor(
+                    context = getApplication(),
+                    repository = measurementRepository,
+                    sessionId = currentSessionId,
+                    patientCode = uiState.sampleId.ifBlank { "P001" },
+                    recordingDay = today,
+                    delayMsPerFile = 500L,
+                    onProgressUpdate = { transferred, total, latest ->
+                        val currentList = measurementRepository.getMeasurementsForSession(currentSessionId)
+                        uiState = uiState.copy(
+                            measurementEntities = currentList,
+                            message = "Bluetooth Transfer: $transferred / $total files (${latest.sensor_file_name})"
+                        )
+                    }
+                )
+
+                uiState = uiState.copy(
+                    isLoading = false,
+                    message = "Bluetooth transfer complete: ${transferredList.size} files received."
+                )
+            } catch (e: Exception) {
+                uiState = uiState.copy(
+                    isLoading = false,
+                    message = "File transfer failed: ${e.message}"
                 )
             }
         }
@@ -363,7 +480,7 @@ fun ResearchScreenContent(
         onResult = { uri: Uri? ->
             if (uri != null) {
                 // 2. Generate the CSV text right here when needed
-                val csvText = measurementListToCsv(uiState.measurementEntities)
+                val csvText = MeasurementFileUtil.measurementListToCsv(uiState.measurementEntities)
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     outputStream.write(csvText.toByteArray())
                 }
@@ -374,23 +491,8 @@ fun ResearchScreenContent(
         }
     )
 
-    val values = uiState.measurementEntities.map {
-        it.value
-    }
-
-    val meanText = if (values.isNotEmpty()) {
-        "%.3f".format(values.average())
-    } else {
-        "--"
-    }
-
-    val minText = values.minOrNull()?.let {
-        "%.3f".format(it)
-    } ?: "--"
-
-    val maxText = values.maxOrNull()?.let {
-        "%.3f".format(it)
-    } ?: "--"
+    val transferredCount = uiState.measurementEntities.count { it.transfer_status == TransferStatus.TRANSFERRED }
+    val latestFileName = uiState.measurementEntities.lastOrNull()?.sensor_file_name ?: "--"
 
     /**
     Drawing UI
@@ -470,13 +572,11 @@ fun ResearchScreenContent(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Latest value: ")
+                Text("Latest sensor file: ")
 
                 Text(
-                    text = uiState.latestValue?.let {
-                        "%.3f".format(it)
-                    } ?: "--",
-                    fontSize = 40.sp
+                    text = latestFileName,
+                    fontSize = 18.sp
                 )
 
                 val acquisitionStatus =
@@ -493,10 +593,8 @@ fun ResearchScreenContent(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Acquisition Status: $acquisitionStatus")
-                    Text("Measurement Count: ${uiState.measurementEntities.size}")
-                    Text("Mean: $meanText")
-                    Text("Min: $minText")
-                    Text("Max: $maxText")
+                    Text("Total Files: ${uiState.measurementEntities.size}")
+                    Text("Transferred: $transferredCount")
                 }
 
             }
@@ -545,7 +643,7 @@ fun ResearchScreenContent(
             Button(
                 onClick = {
                     val filename = if (uiState.sampleId.isNotBlank()) {
-                        "${safeFilename(uiState.sampleId)}_measurements.csv"
+                        "${MeasurementFileUtil.safeFilename(uiState.sampleId)}_measurements.csv"
                     } else {
                         "measurements.csv"
                     }
@@ -586,18 +684,48 @@ fun MeasurementRow(
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text("Session: ${measurementEntity.sessionId}")
-            Text("Repetition: ${measurementEntity.repetition}")
-            Text("Value: ${"%.3f".format(measurementEntity.value)}")
-            Text("Status: ${measurementEntity.status}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "File ID: ${measurementEntity.file_id}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "Status: ${measurementEntity.transfer_status}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            Text(
+                text = "Sensor File: ${measurementEntity.sensor_file_name}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "Tablet File: ${measurementEntity.tablet_file_name}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Rec Index: ${measurementEntity.recording_index}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = "Repeat Index: ${measurementEntity.repeat_index}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
