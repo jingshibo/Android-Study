@@ -10,7 +10,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,8 +18,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,17 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewModelScope
 import android.widget.Toast
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
 
 
 /**
@@ -410,6 +401,23 @@ class ResearchViewModel(
     }
 }
 
+class ScreenActivity : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContent {
+            MaterialTheme {
+                // Create a viewModel object
+                val viewModel: ResearchViewModel = viewModel()
+                // Draw UI using the viewModel input
+                ResearchScreen(
+                    viewModel = viewModel
+                )
+            }
+        }
+    }
+}
 
 /**
 UI Drawing
@@ -625,7 +633,7 @@ fun ResearchScreenContent(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
-                onClick = onClear, // onClick = { onClear() }
+                onClick = onClear,
                 modifier = Modifier.weight(1f),
                 enabled = uiState.acquisitionState != AcquisitionState.RECORDING
             ) {
@@ -738,249 +746,4 @@ object Routes {
     const val PATIENT_DETAIL = "patient_detail"
     const val MEASUREMENT = "measurement"
     const val RESULT = "result"
-}
-
-@Composable
-fun ResearchApp() {
-    val navController = rememberNavController() // The navController is responsible for moving between screens.
-
-    NavHost( // NavHost is like the screen container. It decides which screen should currently be visible.
-        navController = navController,
-        startDestination = Routes.PATIENT_LIST // Start the app at the patient list screen.
-    ) {
-        composable(Routes.PATIENT_LIST) {
-            PatientListScreen(
-                onPatientDetailClick = { patientId ->
-                    navController.navigate(
-                        "${Routes.PATIENT_DETAIL}/$patientId"
-                    )
-                }
-            )
-        }
-
-        composable(route = "${Routes.PATIENT_DETAIL}/{patientId}") {
-            backStackEntry ->
-            val patientId = backStackEntry.arguments
-                ?.getString("patientId")
-                ?.toLongOrNull()
-
-            if (patientId != null) {
-                PatientDetailScreen(
-                    patientId = patientId,
-                    onStartSessionClick = { sessionId ->
-                        navController.navigate(
-                            "${Routes.MEASUREMENT}/$sessionId"
-                        )
-                    },
-                    onBackClick = {
-                        navController.popBackStack()
-                    }
-                )
-            }
-        }
-
-        composable(route = "${Routes.MEASUREMENT}/{sessionId}") {
-            backStackEntry ->
-            val sessionId = backStackEntry.arguments
-                ?.getString("sessionId")
-                ?.toLongOrNull()
-
-            if (sessionId != null) {
-                MeasurementScreen(
-                    sessionId = sessionId,
-                    onResultClick = {
-                        navController.navigate(
-                            "${Routes.RESULT}/$sessionId"
-                        )
-                    },
-                    onBackClick = {
-                        navController.popBackStack()
-                    }
-                )
-            }
-        }
-
-        composable(route = "${Routes.RESULT}/{sessionId}") {
-            backStackEntry ->
-            val sessionId = backStackEntry.arguments
-                ?.getString("sessionId")
-                ?.toLongOrNull()
-
-            if (sessionId != null) {
-                ResultScreen(
-                    sessionId = sessionId,
-                    onBackClick = {
-                        navController.popBackStack()
-                    }
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
-fun PatientListScreen(
-    onPatientDetailClick: (Long) -> Unit // When clicks a patient, send the patient ID back to open patient detail.
-) {
-    Column(
-        modifier = Modifier.padding(16.dp)
-    ) {
-        Text("Patients")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                onPatientDetailClick(1L)
-            }
-        ) {
-            Text("Open Patient P001")
-        }
-
-        Button(
-            onClick = {
-                onPatientDetailClick(2L)
-            }
-        ) {
-            Text("Open Patient P002")
-        }
-    }
-}
-
-@Composable
-fun PatientDetailScreen(
-    patientId: Long,
-    onStartSessionClick: (Long) -> Unit,
-    onBackClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(16.dp)
-    ) {
-        Button(
-            onClick = onBackClick
-        ) {
-            Text("Back")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Patient Detail")
-        Text("Patient ID: $patientId")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                onStartSessionClick(10L)
-            }
-        ) {
-            Text("Start Session")
-        }
-    }
-}
-
-@Composable
-fun MeasurementScreen(
-    sessionId: Long,
-    onResultClick: () -> Unit,
-    onBackClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(16.dp)
-    ) {
-        Button(
-            onClick = onBackClick
-        ) {
-            Text("Back")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Measurement Screen")
-        Text("Session ID: $sessionId")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Device status: Connected")
-        Text("Acquisition status: Stopped")
-        Text("Latest value: --")
-        Text("Measurements: 0")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Button(
-                onClick = {
-                    // later: viewModel.startAcquisition(sessionId)
-                }
-            ) {
-                Text("Start")
-            }
-
-            Button(
-                onClick = {
-                    // later: viewModel.stopAcquisition()
-                }
-            ) {
-                Text("Stop")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = onResultClick
-        ) {
-            Text("View Result")
-        }
-    }
-}
-
-@Composable
-fun ResultScreen(
-    sessionId: Long,
-    onBackClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(16.dp)
-    ) {
-        Button(
-            onClick = onBackClick
-        ) {
-            Text("Back")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Result Screen")
-        Text("Session ID: $sessionId")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Prediction: Not available yet")
-        Text("Confidence: --")
-    }
-}
-
-
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        setContent {
-            MaterialTheme {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .systemBarsPadding(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    ResearchApp()
-                }
-            }
-        }
-    }
 }

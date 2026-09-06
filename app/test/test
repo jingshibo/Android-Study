@@ -1,0 +1,926 @@
+package com.example.myapplication
+
+import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+import androidx.room.Database
+import androidx.room.RoomDatabase
+import androidx.room.Room
+import androidx.room.TypeConverter
+import androidx.room.TypeConverters
+import androidx.room.Index
+import androidx.room.ForeignKey
+import androidx.room.Update
+
+/**
+ * Class definition & Enums
+ */
+enum class PatientSex {
+    MALE,
+    FEMALE,
+    OTHER,
+    UNKNOWN
+}
+
+enum class Arm {
+    LEFT,
+    RIGHT,
+    UNKNOWN
+}
+
+enum class PatientStatus {
+    MF_POSITIVE,
+    MF_NEGATIVE,
+    UNCERTAIN
+}
+
+enum class SessionStatus {
+    ON_SENSOR,
+    TRANSFERRED,
+    ANALYSED,
+    CORRUPTED
+}
+
+enum class TransferStatus {
+    ON_SENSOR, /** File exists on the sensor hardware, pending transfer to the tablet. */
+    TRANSFERRED, /** File was successfully transferred to tablet storage and verified. */
+    MISSING, /** File was expected but not found on the sensor hardware. */
+    CORRUPTED /** File was transferred, but data is damaged or incomplete. */
+
+}
+
+enum class SignalQuality {
+    GOOD,
+    ACCEPTABLE,
+    BAD,
+    ERROR
+}
+
+enum class ChecksumStatus {
+    PASS,
+    FAIL
+}
+
+enum class PredictionLabel {
+    MF_POSITIVE,
+    MF_NEGATIVE,
+    UNCERTAIN
+}
+
+const val AUTOSAVE_FILENAME = "autosave_measurements.csv"
+
+class MeasurementRepository(
+    private val context: Context
+) {
+
+    /*
+       Database Instance & DAOs
+     */
+    private val database = ResearchDatabase.getDatabase(context)
+
+    private val patientDao = database.patientDao()
+    private val sessionDao = database.sessionDao()
+    private val measurementDao = database.measurementDao()
+    private val resultDao = database.resultDao()
+
+    // ------------------------------------------------------------------------
+    // Patient Operations
+    // ------------------------------------------------------------------------
+
+    /** Retrieves an existing patient by patient_code, or creates a new one if not found. */
+    suspend fun getOrCreatePatient(
+        patientCode: String,
+        sex: PatientSex? = null,
+        age: Int? = null,
+        arm: Arm? = null,
+        status: PatientStatus? = null,
+        location: String? = null,
+        notes: String? = null
+    ): Long {
+        val existing = patientDao.getPatientByCode(patientCode)
+        if (existing != null) {
+            return existing.patient_id
+        }
+        return patientDao.insertPatient(
+            PatientEntity(
+                patient_code = patientCode,
+                sex = sex,
+                age = age,
+                arm = arm,
+                status = status,
+                location = location,
+                notes = notes
+            )
+        )
+    }
+
+    /** Retrieves all patients ordered by patient code. */
+    suspend fun getAllPatients(): List<PatientEntity> = patientDao.getAllPatients()
+
+    /** search patients by flexible criteria. */
+    suspend fun searchPatients(
+        patientCodeQuery: String? = null,
+        sex: PatientSex? = null,
+        minAge: Int? = null,
+        maxAge: Int? = null,
+        arm: Arm? = null,
+        status: PatientStatus? = null,
+        location: String? = null
+    ): List<PatientEntity> = patientDao.searchPatients(
+        patientCodeQuery = patientCodeQuery,
+        sex = sex?.name,
+        minAge = minAge,
+        maxAge = maxAge,
+        arm = arm?.name,
+        status = status?.name,
+        location = location
+    )
+
+    /** Updates an existing patient record. */
+    suspend fun updatePatient(patient: PatientEntity) = patientDao.updatePatient(patient)
+
+    // ------------------------------------------------------------------------
+    // Session Operations
+    // ------------------------------------------------------------------------
+
+    /** Creates or retrieves patient and creates a new session. */
+    suspend fun createPatientAndSession(
+        patientCode: String,
+        sessionName: String
+    ): Long {
+        val patientId = getOrCreatePatient(patientCode)
+        val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault())
+            .format(java.util.Date())
+
+        return sessionDao.insertSession(
+            SessionEntity(
+                patient_id = patientId,
+                device_id = 1L,
+                recording_day = today,
+                start_time = System.currentTimeMillis(),
+                session_status = SessionStatus.ON_SENSOR,
+                notes = sessionName
+            )
+        )
+    }
+
+    /** Searches and filters sessions using flexible optional parameters. */
+    suspend fun searchSessions(
+        patientId: Long? = null,
+        deviceId: Long? = null,
+        recordingDay: String? = null,
+        sessionStatus: SessionStatus? = null,
+        recordingInterval: Int? = null,
+        recordingRepeats: Int? = null,
+        frequencyStartGhz: Double? = null,
+        frequencyEndGhz: Double? = null
+    ): List<SessionEntity> = sessionDao.searchSessions(
+        patientId = patientId,
+        deviceId = deviceId,
+        recordingDay = recordingDay,
+        sessionStatus = sessionStatus?.name,
+        recordingInterval = recordingInterval,
+        recordingRepeats = recordingRepeats,
+        frequencyStartGhz = frequencyStartGhz,
+        frequencyEndGhz = frequencyEndGhz
+    )
+
+    /** Updates the status of a specific session. */
+    suspend fun updateSessionStatus(sessionId: Long, status: SessionStatus) =
+        sessionDao.updateSessionStatus(sessionId, status)
+
+    /** Deletes a session and all its associated measurements and results. */
+    suspend fun deleteSession(sessionId: Long): Int = sessionDao.deleteSessionById(sessionId)
+
+    // ------------------------------------------------------------------------
+    // Measurement File Operations
+    // ------------------------------------------------------------------------
+
+    /** Creates a simulated measurement entity for testing. */
+    fun createSimulatedMeasurement(
+        session_id: Long,
+        recording_index: Int = 1,
+        repeat_index: Int = 1,
+        file_index: Int? = null
+    ): MeasurementEntity {
+        val now = System.currentTimeMillis()
+        val timestampStr =
+            java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+                .format(java.util.Date(now))
+        val sensorFileName =
+            "R${"%03d".format(recording_index)}_Rep${"%02d".format(repeat_index)}_$now"
+        val tabletFileName = "D003_P001_${timestampStr}_$sensorFileName"
+        val tabletFilePath = "export/$tabletFileName"
+
+        return MeasurementEntity(
+            session_id = session_id,
+            sensor_file_name = sensorFileName,
+            tablet_file_name = tabletFileName,
+            tablet_file_path = tabletFilePath,
+            recording_index = recording_index,
+            repeat_index = repeat_index,
+            file_index = file_index ?: recording_index,
+            recorded_at = now,
+            transferred_at = now,
+            transfer_status = TransferStatus.TRANSFERRED
+        )
+    }
+
+    /** Inserts a single measurement file record into the database. */
+    suspend fun insertMeasurement(measurementEntity: MeasurementEntity): Long =
+        measurementDao.insertMeasurement(measurementEntity)
+
+    /** Inserts a batch list of measurement file records. */
+    suspend fun insertMeasurements(measurements: List<MeasurementEntity>): List<Long> =
+        measurementDao.insertMeasurement(measurements)
+
+    /** Retrieves all measurement file records for a session. */
+    suspend fun getMeasurementsForSession(session_id: Long): List<MeasurementEntity> =
+        measurementDao.getMeasurementsBySession(session_id)
+
+    /** Returns the total count of measurement files in a session. */
+    suspend fun getMeasurementCount(sessionId: Long): Int =
+        measurementDao.getMeasurementCount(sessionId)
+
+    /** Updates the transfer status and details for a measurement file. */
+    suspend fun updateTransferDetails(
+        fileId: Long,
+        status: TransferStatus,
+        transferredAt: Long = System.currentTimeMillis(),
+        checksum: ChecksumStatus? = null,
+        fileSizeBytes: Long? = null
+    ) = measurementDao.updateTransferDetails(fileId, status, transferredAt, checksum, fileSizeBytes)
+
+    /** Deletes all measurement records for a specific session. */
+    suspend fun deleteMeasurementsForSession(session_id: Long) =
+        measurementDao.deleteMeasurementsBySession(session_id)
+
+    /** Deletes a single measurement file record by file ID. */
+    suspend fun deleteMeasurement(fileId: Long): Int =
+        measurementDao.deleteMeasurementById(fileId)
+
+    // ------------------------------------------------------------------------
+    // Result / Prediction Operations
+    // ------------------------------------------------------------------------
+
+    /** Inserts an AI model prediction result for a session. */
+    suspend fun insertResult(result: ResultEntity): Long = resultDao.insertResult(result)
+
+    /** Retrieves all prediction results for a given session. */
+    suspend fun getResultsForSession(sessionId: Long): List<ResultEntity> =
+        resultDao.getResultsBySession(sessionId)
+
+    /** Retrieves the most recent prediction result for a session. */
+    suspend fun getLatestResultForSession(sessionId: Long): ResultEntity? =
+        resultDao.getLatestResultBySession(sessionId)
+
+    // ------------------------------------------------------------------------
+    // Internal File Writing & CSV Import/Export Operations
+    // ------------------------------------------------------------------------
+
+    /** Exports all measurements for a session as CSV text. */
+    suspend fun exportSessionToCsv(sessionId: Long): String {
+        val measurements = getMeasurementsForSession(sessionId)
+        return measurementListToCsv(measurements)
+    }
+
+    /** Imports measurements from CSV text and saves them to the database. */
+    suspend fun importSessionFromCsv(csvText: String): List<Long> {
+        val measurements = csvToMeasurementList(csvText)
+        return if (measurements.isNotEmpty()) {
+            insertMeasurements(measurements)
+        } else {
+            emptyList()
+        }
+    }
+
+    /** Saves a list of measurements as CSV to internal app storage. */
+    suspend fun saveMeasurementsToInternal(measurementEntities: List<MeasurementEntity>) {
+        withContext(Dispatchers.IO) {
+            val csvText = measurementListToCsv(measurementEntities)
+            context.openFileOutput(AUTOSAVE_FILENAME, Context.MODE_PRIVATE).use { outputStream ->
+                outputStream.write(csvText.toByteArray())
+            }
+        }
+    }
+
+    /** Loads measurements from internal CSV storage. */
+    suspend fun loadMeasurementsFromInternal(): List<MeasurementEntity> {
+        return withContext(Dispatchers.IO) {
+            val csvText = context
+                .openFileInput(AUTOSAVE_FILENAME)
+                .bufferedReader()
+                .use { reader -> reader.readText() }
+            csvToMeasurementList(csvText)
+        }
+    }
+}
+
+
+/**
+ * Room database definition
+ */
+// Room Database
+@Database(
+    entities = [
+        PatientEntity::class,
+        SessionEntity::class,
+        MeasurementEntity::class,
+        ResultEntity::class
+    ],
+    version = 1,
+    exportSchema = false
+)
+@TypeConverters(Converters::class)
+abstract class ResearchDatabase : RoomDatabase() {
+    abstract fun patientDao(): PatientDao
+    abstract fun sessionDao(): SessionDao
+    abstract fun measurementDao(): MeasurementDao
+    abstract fun resultDao(): ResultDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: ResearchDatabase? = null
+
+        fun getDatabase(context: Context): ResearchDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    ResearchDatabase::class.java,
+                    "research_database"
+                )
+                    .fallbackToDestructiveMigration(true)
+                    .build()
+
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
+
+
+class Converters {
+    @TypeConverter
+    fun fromChecksumStatus(status: ChecksumStatus?): String? = status?.name
+
+    @TypeConverter
+    fun toChecksumStatus(value: String?): ChecksumStatus? {
+        return value?.let {
+            try { ChecksumStatus.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromPatientSex(sex: PatientSex?): String? = sex?.name
+
+    @TypeConverter
+    fun toPatientSex(value: String?): PatientSex? {
+        return value?.let {
+            try { PatientSex.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromArm(arm: Arm?): String? = arm?.name
+
+    @TypeConverter
+    fun toArm(value: String?): Arm? {
+        return value?.let {
+            try { Arm.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromPatientConditionStatus(status: PatientStatus?): String? = status?.name
+
+    @TypeConverter
+    fun toPatientConditionStatus(value: String?): PatientStatus? {
+        return value?.let {
+            try { PatientStatus.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromSessionStatus(status: SessionStatus): String = status.name
+
+    @TypeConverter
+    fun toSessionStatus(value: String): SessionStatus {
+        return try {
+            SessionStatus.valueOf(value)
+        } catch (e: Exception) {
+            SessionStatus.ON_SENSOR
+        }
+    }
+
+    @TypeConverter
+    fun fromTransferStatus(status: TransferStatus): String = status.name
+
+    @TypeConverter
+    fun toTransferStatus(value: String): TransferStatus {
+        return try {
+            TransferStatus.valueOf(value)
+        } catch (e: Exception) {
+            TransferStatus.ON_SENSOR
+        }
+    }
+
+    @TypeConverter
+    fun fromSignalQuality(quality: SignalQuality?): String? = quality?.name
+
+    @TypeConverter
+    fun toSignalQuality(value: String?): SignalQuality? {
+        return value?.let {
+            try { SignalQuality.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromPredictionLabel(label: PredictionLabel): String = label.name
+
+    @TypeConverter
+    fun toPredictionLabel(value: String): PredictionLabel {
+        return try {
+            PredictionLabel.valueOf(value)
+        } catch (e: Exception) {
+            PredictionLabel.UNCERTAIN
+        }
+    }
+}
+
+
+/**
+ * Database Entity (Table) Definition
+ */
+@Entity(
+    tableName = "patients",
+    indices = [Index(value = ["patient_code"], unique = true)]
+)
+data class PatientEntity(
+    @PrimaryKey(autoGenerate = true)
+    val patient_id: Long = 0,
+
+    val patient_code: String,
+    val sex: PatientSex? = null,
+    val age: Int? = null,
+    val arm: Arm? = null,
+    val status: PatientStatus? = null,
+    val location: String? = null,
+    val created_at: Long = System.currentTimeMillis(),
+    val notes: String? = null
+)
+
+@Entity(
+    tableName = "sessions",
+    foreignKeys = [
+        ForeignKey(
+            entity = PatientEntity::class,
+            parentColumns = ["patient_id"],
+            childColumns = ["patient_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["patient_id", "device_id", "recording_day"], unique = true)
+    ]
+)
+data class SessionEntity(
+    @PrimaryKey(autoGenerate = true)
+    val session_id: Long = 0,
+
+    val device_id: Long = 1,
+    val patient_id: Long,
+    val recording_day: String,
+    val start_time: Long? = null,
+    val end_time: Long? = null,
+    val recording_interval: Int = 10,
+    val recording_repeats: Int = 5,
+    val frequency_start_ghz: Double = 1.0,
+    val frequency_end_ghz: Double = 6.0,
+    val session_status: SessionStatus = SessionStatus.ON_SENSOR,
+    val notes: String? = null
+)
+
+// Room Entity: Measurement represents one measurement row
+@Entity(
+    tableName = "measurements",
+    foreignKeys = [
+        ForeignKey(
+            entity = SessionEntity::class,
+            parentColumns = ["session_id"],
+            childColumns = ["session_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["session_id", "sensor_file_name"], unique = true)
+    ]
+)
+data class MeasurementEntity(
+    @PrimaryKey(autoGenerate = true)
+    val file_id: Long = 0,
+
+    val session_id: Long,
+    val sensor_file_name: String,
+    val tablet_file_name: String,
+    val tablet_file_path: String,
+    val recording_index: Int,
+    val repeat_index: Int,
+    val file_index: Int? = null,
+    val recorded_at: Long? = null,
+    val transferred_at: Long? = null,
+    val transfer_status: TransferStatus = TransferStatus.ON_SENSOR,
+    val signal_quality: SignalQuality? = null,
+    val checksum: ChecksumStatus? = null,
+    val file_size_bytes: Long? = null,
+    val notes: String? = null
+)
+
+@Entity(
+    tableName = "results",
+    foreignKeys = [
+        ForeignKey(
+            entity = SessionEntity::class,
+            parentColumns = ["session_id"],
+            childColumns = ["session_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["session_id"], unique = true)]
+)
+data class ResultEntity(
+    @PrimaryKey(autoGenerate = true)
+    val prediction_id: Long = 0,
+
+    val session_id: Long,
+    val model_name: String,
+    val model_version: String,
+    val prediction_label: PredictionLabel,
+    val probability_json: String? = null,
+    val confidence: Double? = null,
+    val input_file_count: Int? = null,
+    val predicted_at: Long = System.currentTimeMillis(),
+    val notes: String? = null
+)
+
+
+/**
+ * Database DAO Definition
+ */
+@Dao
+interface PatientDao {
+
+    /** Inserts a new patient record into the database and returns the generated patient ID. */
+    @Insert
+    suspend fun insertPatient(patient: PatientEntity): Long
+
+    /** Updates an existing patient record in the database. */
+    @Update
+    suspend fun updatePatient(patient: PatientEntity)
+
+    /** Retrieves all patient records ordered alphabetically by patient code. */
+    @Query("SELECT * FROM patients ORDER BY patient_code ASC")
+    suspend fun getAllPatients(): List<PatientEntity>
+
+    /** Retrieves a single patient matching the exact patient code. */
+    @Query("SELECT * FROM patients WHERE patient_code = :patientCode LIMIT 1")
+    suspend fun getPatientByCode(patientCode: String): PatientEntity?
+
+    /** Finds patients whose patient code contains the given partial search query. */
+    @Query(
+        """
+    SELECT * FROM patients
+    WHERE patient_code LIKE '%' || :query || '%'
+    ORDER BY patient_code ASC
+    """
+    )
+    suspend fun getPatientByPartialCode(query: String): List<PatientEntity>
+
+    /** Searches and filters patient records using multiple optional criteria. */
+    @Query(
+        """
+    SELECT * FROM patients
+    WHERE (:patientCodeQuery IS NULL OR patient_code LIKE '%' || :patientCodeQuery || '%')
+      AND (:sex IS NULL OR sex = :sex)
+      AND (:minAge IS NULL OR age >= :minAge)
+      AND (:maxAge IS NULL OR age <= :maxAge)
+      AND (:arm IS NULL OR arm = :arm)
+      AND (:status IS NULL OR status = :status)
+      AND (:location IS NULL OR location = :location)
+    ORDER BY patient_code ASC
+    """
+    )
+    suspend fun searchPatients(
+        patientCodeQuery: String?,
+        sex: String?,
+        minAge: Int?,
+        maxAge: Int?,
+        arm: String?,
+        status: String?,
+        location: String?
+    ): List<PatientEntity>
+}
+
+@Dao
+interface SessionDao {
+
+    /** Inserts a new measurement session and returns its generated session ID. */
+    @Insert
+    suspend fun insertSession(session: SessionEntity): Long
+
+    /** Updates an existing measurement session record. */
+    @Update
+    suspend fun updateSession(session: SessionEntity)
+
+    /** Retrieves a session matching a specific patient, device, and recording day combination. */
+    @Query(
+        """
+    SELECT * FROM sessions
+    WHERE patient_id = :patientId
+      AND device_id = :deviceId
+      AND recording_day = :recordingDay
+    LIMIT 1
+    """
+    )
+    suspend fun getSessionByPatientDeviceDay(
+        patientId: Long,
+        deviceId: Long,
+        recordingDay: String
+    ): SessionEntity?
+
+    /** Updates the status of a specific measurement session. */
+    @Query("UPDATE sessions SET session_status = :status WHERE session_id = :sessionId")
+    suspend fun updateSessionStatus(sessionId: Long, status: SessionStatus)
+
+    /** Deletes a session by its ID, cascading deletion to associated measurements and results. */
+    @Query("DELETE FROM sessions WHERE session_id = :sessionId")
+    suspend fun deleteSessionById(sessionId: Long): Int
+
+    /** Searches and filters sessions using multiple optional parameters. */
+    @Query(
+        """
+    SELECT * FROM sessions
+    WHERE (:patientId IS NULL OR patient_id = :patientId)
+      AND (:deviceId IS NULL OR device_id = :deviceId)
+      AND (:recordingDay IS NULL OR recording_day = :recordingDay)
+      AND (:sessionStatus IS NULL OR session_status = :sessionStatus)
+      AND (:recordingInterval IS NULL OR recording_interval = :recordingInterval)
+      AND (:recordingRepeats IS NULL OR recording_repeats = :recordingRepeats)
+      AND (:frequencyStartGhz IS NULL OR frequency_start_ghz = :frequencyStartGhz)
+      AND (:frequencyEndGhz IS NULL OR frequency_end_ghz = :frequencyEndGhz)
+    ORDER BY recording_day DESC, session_id DESC
+    """
+    )
+    suspend fun searchSessions(
+        patientId: Long?,
+        deviceId: Long?,
+        recordingDay: String?,
+        sessionStatus: String?,
+        recordingInterval: Int?,
+        recordingRepeats: Int?,
+        frequencyStartGhz: Double?,
+        frequencyEndGhz: Double?
+    ): List<SessionEntity>
+}
+
+@Dao
+interface MeasurementDao {
+
+    /** Inserts a single measurement file record and returns its generated file ID. */
+    @Insert
+    suspend fun insertMeasurement(measurement: MeasurementEntity): Long
+
+    /** Inserts a batch list of measurement file records and returns their generated file IDs. */
+    @Insert
+    suspend fun insertMeasurement(measurements: List<MeasurementEntity>): List<Long>
+
+    /** Updates an existing measurement file record. */
+    @Update
+    suspend fun updateMeasurement(measurement: MeasurementEntity): Int
+
+    /** Retrieves all measurement files belonging to a specific session. */
+    @Query("SELECT * FROM measurements WHERE session_id = :sessionId ORDER BY file_id ASC")
+    suspend fun getMeasurementsBySession(sessionId: Long): List<MeasurementEntity>
+
+    /** Returns the total count of measurement files recorded for a session. */
+    @Query("SELECT COUNT(*) FROM measurements WHERE session_id = :sessionId")
+    suspend fun getMeasurementCount(sessionId: Long): Int
+
+    /** Updates the transfer status for a specific measurement file. */
+    @Query("UPDATE measurements SET transfer_status = :status WHERE file_id = :measurementId")
+    suspend fun updateTransferStatus(measurementId: Long, status: String): Int
+
+    /** Updates the transfer status and details for a specific measurement file. */
+    @Query("UPDATE measurements SET transfer_status = :status, transferred_at = :transferredAt, checksum = :checksum, file_size_bytes = :fileSizeBytes WHERE file_id = :fileId")
+    suspend fun updateTransferDetails(
+        fileId: Long,
+        status: TransferStatus,
+        transferredAt: Long,
+        checksum: ChecksumStatus?,
+        fileSizeBytes: Long?
+    )
+
+    /** Deletes a single measurement file record by its file ID. */
+    @Query("DELETE FROM measurements WHERE file_id = :measurementId")
+    suspend fun deleteMeasurementById(measurementId: Long): Int
+
+    /** Deletes all measurement file records belonging to a session. */
+    @Query("DELETE FROM measurements WHERE session_id = :sessionId")
+    suspend fun deleteMeasurementsBySession(sessionId: Long)
+
+    /** Searches and filters measurement file records using flexible optional criteria. */
+    @Query(
+        """
+    SELECT * FROM measurements
+    WHERE (:sessionId IS NULL OR session_id = :sessionId)
+      AND (:recordingIndex IS NULL OR recording_index = :recordingIndex)
+      AND (:repeatIndex IS NULL OR repeat_index = :repeatIndex)
+      AND (:transferStatus IS NULL OR transfer_status = :transferStatus)
+      AND (:sensorFileName IS NULL OR sensor_file_name LIKE '%' || :sensorFileName || '%')
+      AND (:tabletFileName IS NULL OR tablet_file_name LIKE '%' || :tabletFileName || '%')
+      AND (:minFileSizeBytes IS NULL OR file_size_bytes >= :minFileSizeBytes)
+      AND (:maxFileSizeBytes IS NULL OR file_size_bytes <= :maxFileSizeBytes)
+      AND (:fromTransferredAt IS NULL OR transferred_at >= :fromTransferredAt)
+      AND (:toTransferredAt IS NULL OR transferred_at <= :toTransferredAt)
+    ORDER BY session_id DESC, recording_index ASC, repeat_index ASC
+    """
+    )
+    suspend fun searchMeasurements(
+        sessionId: Long?,
+        recordingIndex: Int?,
+        repeatIndex: Int?,
+        transferStatus: String?,
+        sensorFileName: String?,
+        tabletFileName: String?,
+        minFileSizeBytes: Long?,
+        maxFileSizeBytes: Long?,
+        fromTransferredAt: Long?,
+        toTransferredAt: Long?
+    ): List<MeasurementEntity>
+}
+
+@Dao
+interface ResultDao {
+
+    /** Inserts a new prediction result record and returns its generated prediction ID. */
+    @Insert
+    suspend fun insertResult(result: ResultEntity): Long
+
+    /** Updates an existing prediction result record. */
+    @Update
+    suspend fun updateResult(result: ResultEntity): Int
+
+    /** Retrieves all prediction results for a given session sorted by prediction timestamp. */
+    @Query("SELECT * FROM results WHERE session_id = :session_id ORDER BY predicted_at DESC")
+    suspend fun getResultsBySession(session_id: Long): List<ResultEntity>
+
+    /** Retrieves the most recent prediction result for a session. */
+    @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY predicted_at DESC LIMIT 1")
+    suspend fun getLatestResultBySession(sessionId: Long): ResultEntity?
+
+    /** Deletes a specific prediction result record by its ID. */
+    @Query("DELETE FROM results WHERE prediction_id = :resultId")
+    suspend fun deleteResultById(resultId: Long): Int
+
+    /** Deletes all prediction result records associated with a session. */
+    @Query("DELETE FROM results WHERE session_id = :sessionId")
+    suspend fun deleteResultsBySession(sessionId: Long)
+
+    /** Searches and filters prediction results based on optional criteria. */
+    @Query(
+        """
+    SELECT * FROM results
+    WHERE (:sessionId IS NULL OR session_id = :sessionId)
+      AND (:predictionLabel IS NULL OR prediction_label = :predictionLabel)
+      AND (:modelName IS NULL OR model_name = :modelName)
+      AND (:modelVersion IS NULL OR model_version = :modelVersion)
+      AND (:minConfidence IS NULL OR confidence >= :minConfidence)
+      AND (:maxConfidence IS NULL OR confidence <= :maxConfidence)
+      AND (:fromPredictedAt IS NULL OR predicted_at >= :fromPredictedAt)
+      AND (:toPredictedAt IS NULL OR predicted_at <= :toPredictedAt)
+    ORDER BY predicted_at DESC
+    """
+    )
+    suspend fun searchResults(
+        sessionId: Long?,
+        predictionLabel: String?,
+        modelName: String?,
+        modelVersion: String?,
+        minConfidence: Double?,
+        maxConfidence: Double?,
+        fromPredictedAt: Long?,
+        toPredictedAt: Long?
+    ): List<ResultEntity>
+}
+
+
+/**
+CSC text processing functions
+ */
+fun measurementListToCsv(
+    measurementEntityList: List<MeasurementEntity>
+): String {
+    val header =
+        "file_id,session_id,sensor_file_name,tablet_file_name,tablet_file_path,recording_index,repeat_index,file_index,recorded_at,transferred_at,transfer_status,signal_quality,checksum,file_size_bytes,notes"
+    val rows =
+        measurementEntityList.joinToString(separator = "\n") { m ->
+            "${m.file_id}," +
+                    "${m.session_id}," +
+                    "${escapeCsv(m.sensor_file_name)}," +
+                    "${escapeCsv(m.tablet_file_name)}," +
+                    "${escapeCsv(m.tablet_file_path)}," +
+                    "${m.recording_index}," +
+                    "${m.repeat_index}," +
+                    "${m.file_index ?: ""}," +
+                    "${m.recorded_at ?: ""}," +
+                    "${m.transferred_at ?: ""}," +
+                    "${escapeCsv(m.transfer_status.name)}," +
+                    "${escapeCsv(m.signal_quality?.name ?: "")}," +
+                    "${escapeCsv(m.checksum?.name ?: "")}," +
+                    "${m.file_size_bytes ?: ""}," +
+                    "${escapeCsv(m.notes ?: "")}"
+        }
+    return "$header\n$rows"
+}
+
+fun csvToMeasurementList(
+    csvText: String
+): List<MeasurementEntity> {
+
+    val lines = csvText
+        .lines()
+        .filter { it.isNotBlank() }
+
+    if (lines.size <= 1) {
+        return emptyList()
+    }
+
+    return lines
+        .drop(1)
+        .mapNotNull { line ->
+
+            val parts = line.split(",")
+
+            if (parts.size < 7) {
+                return@mapNotNull null
+            }
+
+            val file_id = parts[0].toLongOrNull() ?: 0L
+            val session_id = parts[1].toLongOrNull() ?: return@mapNotNull null
+            val sensor_file_name = parts[2]
+            val tablet_file_name = parts[3]
+            val tablet_file_path = parts[4]
+            val recording_index = parts[5].toIntOrNull() ?: return@mapNotNull null
+            val repeat_index = parts[6].toIntOrNull() ?: return@mapNotNull null
+            val file_index = parts.getOrNull(7)?.toIntOrNull()
+            val recorded_at = parts.getOrNull(8)?.toLongOrNull()
+            val transferred_at = parts.getOrNull(9)?.toLongOrNull()
+            val transfer_status = parts.getOrNull(10)?.let {
+                try { TransferStatus.valueOf(it) } catch (e: Exception) { TransferStatus.ON_SENSOR }
+            } ?: TransferStatus.ON_SENSOR
+            val signal_quality = parts.getOrNull(11)?.let {
+                try { SignalQuality.valueOf(it) } catch (e: Exception) { null }
+            }
+            val checksum = parts.getOrNull(12)?.let {
+                try { ChecksumStatus.valueOf(it) } catch (e: Exception) { null }
+            }
+            val file_size_bytes = parts.getOrNull(13)?.toLongOrNull()
+            val notes = parts.getOrNull(14)?.ifBlank { null }
+
+            MeasurementEntity(
+                file_id = file_id,
+                session_id = session_id,
+                sensor_file_name = sensor_file_name,
+                tablet_file_name = tablet_file_name,
+                tablet_file_path = tablet_file_path,
+                recording_index = recording_index,
+                repeat_index = repeat_index,
+                file_index = file_index,
+                recorded_at = recorded_at,
+                transferred_at = transferred_at,
+                transfer_status = transfer_status,
+                signal_quality = signal_quality,
+                checksum = checksum,
+                file_size_bytes = file_size_bytes,
+                notes = notes
+            )
+        }
+}
+
+// Escape special characters in a string if it contains a comma, quote, or newline for saving.
+fun escapeCsv(value: String): String {
+    val needsEscaping =
+        value.contains(",") ||
+                value.contains("\"") ||
+                value.contains("\n")
+    return if (needsEscaping) {
+        "\"" + value.replace("\"", "\"\"") + "\""
+    } else {
+        value
+    }
+}
