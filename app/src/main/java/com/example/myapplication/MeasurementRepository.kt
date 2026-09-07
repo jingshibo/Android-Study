@@ -66,7 +66,6 @@ class MeasurementRepository(
         sex: PatientSex? = null,
         minAge: Int? = null,
         maxAge: Int? = null,
-        arm: Arm? = null,
         status: PatientStatus? = null,
         location: String? = null
     ): List<PatientEntity> = patientDao.searchPatients(
@@ -74,7 +73,6 @@ class MeasurementRepository(
         sex = sex?.name,
         minAge = minAge,
         maxAge = maxAge,
-        arm = arm?.name,
         status = status?.name,
         location = location
     )
@@ -107,6 +105,7 @@ class MeasurementRepository(
         patientId: Long? = null,
         deviceId: Long? = null,
         recordingDay: String? = null,
+        arm: Arm? = null,
         sessionStatus: SessionStatus? = null,
         signalQuality: SignalQuality? = null,
         recordingInterval: Int? = null,
@@ -117,6 +116,7 @@ class MeasurementRepository(
         patientId = patientId,
         deviceId = deviceId,
         recordingDay = recordingDay,
+        arm = arm?.name,
         sessionStatus = sessionStatus?.name,
         signalQuality = signalQuality?.name,
         recordingInterval = recordingInterval,
@@ -448,7 +448,6 @@ data class PatientEntity(
     val patient_code: String,
     val sex: PatientSex? = null,
     val age: Int? = null,
-    val arm: Arm? = null,
     val status: PatientStatus? = null,
     val location: String? = null,
     val created_at: Long = System.currentTimeMillis(),
@@ -478,6 +477,7 @@ data class SessionEntity(
     val recording_day: String,
     val start_time: Long? = null,
     val end_time: Long? = null,
+    val arm: Arm? = null,
     val recording_interval: Int = 10,
     val recording_repeats: Int = 5,
     val frequency_start_ghz: Double = 1.0,
@@ -594,7 +594,6 @@ interface PatientDao {
       AND (:sex IS NULL OR sex = :sex)
       AND (:minAge IS NULL OR age >= :minAge)
       AND (:maxAge IS NULL OR age <= :maxAge)
-      AND (:arm IS NULL OR arm = :arm)
       AND (:status IS NULL OR status = :status)
       AND (:location IS NULL OR location = :location)
     ORDER BY patient_code ASC
@@ -605,7 +604,6 @@ interface PatientDao {
         sex: String?,
         minAge: Int?,
         maxAge: Int?,
-        arm: String?,
         status: String?,
         location: String?
     ): List<PatientEntity>
@@ -653,6 +651,7 @@ interface SessionDao {
     WHERE (:patientId IS NULL OR patient_id = :patientId)
       AND (:deviceId IS NULL OR device_id = :deviceId)
       AND (:recordingDay IS NULL OR recording_day = :recordingDay)
+      AND (:arm IS NULL OR arm = :arm)
       AND (:sessionStatus IS NULL OR session_status = :sessionStatus)
       AND (:signalQuality IS NULL OR signal_quality = :signalQuality)
       AND (:recordingInterval IS NULL OR recording_interval = :recordingInterval)
@@ -666,6 +665,7 @@ interface SessionDao {
         patientId: Long?,
         deviceId: Long?,
         recordingDay: String?,
+        arm: String?,
         sessionStatus: String?,
         signalQuality: String?,
         recordingInterval: Int?,
