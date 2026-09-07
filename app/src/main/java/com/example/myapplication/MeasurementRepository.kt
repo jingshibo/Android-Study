@@ -84,11 +84,10 @@ class MeasurementRepository(
     // Session Operations
     // ------------------------------------------------------------------------
 
-    /** Retrieves an existing session by patient, device, and recording day, or creates a new one if not found. */
+    /** Retrieves an existing session by patient and recording day, or creates a new one if not found. */
     suspend fun getOrCreateSession(session: SessionEntity): Long {
-        val existing = sessionDao.getSessionByPatientDeviceDay(
+        val existing = sessionDao.getSessionByPatientDay(
             patientId = session.patient_id,
-            deviceId = session.device_id,
             recordingDay = session.recording_day
         )
         if (existing != null) {
@@ -125,12 +124,30 @@ class MeasurementRepository(
         frequencyEndGhz = frequencyEndGhz
     )
 
-    /** Retrieves a session matching a specific patient, device, and recording day combination. */
+    /** Retrieves a session matching a specific patient and recording day. */
+    suspend fun getSessionByPatientDay(
+        patientId: Long,
+        recordingDay: String
+    ): SessionEntity? = sessionDao.getSessionByPatientDay(patientId, recordingDay)
+
+    /** Retrieves a session matching a specific device ID and recording day. */
+    suspend fun getSessionByDeviceAndDay(
+        deviceId: Long,
+        recordingDay: String
+    ): SessionEntity? = sessionDao.getSessionByDeviceAndDay(deviceId, recordingDay)
+
+    /** Retrieves all sessions matching a specific patient ID and device ID. */
+    suspend fun getSessionsByPatientAndDevice(
+        patientId: Long,
+        deviceId: Long
+    ): List<SessionEntity> = sessionDao.getSessionsByPatientAndDevice(patientId, deviceId)
+
+    /** Retrieves a session matching a specific patient and recording day combination. */
     suspend fun getSessionByPatientDeviceDay(
         patientId: Long,
         deviceId: Long = 1L,
         recordingDay: String
-    ): SessionEntity? = sessionDao.getSessionByPatientDeviceDay(patientId, deviceId, recordingDay)
+    ): SessionEntity? = sessionDao.getSessionByPatientDay(patientId, recordingDay)
 
     /** Updates an existing measurement session record. */
     suspend fun updateSession(session: SessionEntity) = sessionDao.updateSession(session)
@@ -465,7 +482,8 @@ data class PatientEntity(
         )
     ],
     indices = [
-        Index(value = ["patient_id", "device_id", "recording_day"], unique = true)
+        Index(value = ["patient_id", "recording_day"], unique = true),
+        Index(value = ["device_id", "recording_day"], unique = true)
     ]
 )
 data class SessionEntity(
@@ -620,21 +638,47 @@ interface SessionDao {
     @Update
     suspend fun updateSession(session: SessionEntity)
 
-    /** Retrieves a session matching a specific patient, device, and recording day combination. */
+    /** Retrieves a session matching a specific patient and recording day. */
+    @Query(
+        """
+    SELECT * FROM sessions
+    WHERE patient_id = :patientId 
+      AND recording_day = :recordingDay
+    LIMIT 1
+    """
+    )
+    suspend fun getSessionByPatientDay(
+        patientId: Long,
+        recordingDay: String
+    ): SessionEntity?
+
+    /** Retrieves a session matching a specific device ID and recording day. */
+    @Query(
+        """
+    SELECT * FROM sessions
+    WHERE device_id = :deviceId 
+      AND recording_day = :recordingDay
+    LIMIT 1
+    """
+    )
+    suspend fun getSessionByDeviceAndDay(
+        deviceId: Long,
+        recordingDay: String
+    ): SessionEntity?
+
+    /** Retrieves all sessions matching a specific patient ID and device ID. */
     @Query(
         """
     SELECT * FROM sessions
     WHERE patient_id = :patientId 
       AND device_id = :deviceId
-      AND recording_day = :recordingDay
-    LIMIT 1
+    ORDER BY recording_day DESC
     """
     )
-    suspend fun getSessionByPatientDeviceDay(
+    suspend fun getSessionsByPatientAndDevice(
         patientId: Long,
-        deviceId: Long,
-        recordingDay: String
-    ): SessionEntity?
+        deviceId: Long
+    ): List<SessionEntity>
 
     /** Updates the status of a specific measurement session. */
     @Query("UPDATE sessions SET session_status = :status WHERE session_id = :sessionId")
