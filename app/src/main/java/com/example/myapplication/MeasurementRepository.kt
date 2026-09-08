@@ -471,6 +471,16 @@ data class PatientEntity(
     val notes: String? = null
 )
 
+/**
+ * Room Entity: Session represents one overnight measurement session.
+ * 
+ * UNIQUE CONSTRAINTS ENFORCED:
+ * 1. (patient_id, recording_day): A patient can only have one session per recording day.
+ * 2. (device_id, recording_day): A physical sensor device can only be used for one session per day.
+ * 
+ * IMPORTANT: Always validate these conditions in application logic BEFORE downloading or 
+ * writing measurement files to disk storage.
+ */
 @Entity(
     tableName = "sessions",
     foreignKeys = [

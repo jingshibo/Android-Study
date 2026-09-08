@@ -358,7 +358,15 @@ class ResearchViewModel(
         }
     }
 
-    /** Transfers measurement files from sensor device to tablet app safely checking for duplicates. */
+    /** 
+     * Transfers measurement files from sensor device to tablet app.
+     * 
+     * IMPORTANT ARCHITECTURAL DESIGN RULE:
+     * Uniqueness conditions (e.g. patient + day and device + day) MUST be validated BEFORE 
+     * starting wireless transmission or writing files to disk. Pre-checking prevents wasted 
+     * network bandwidth, CPU usage, and orphaned files on tablet storage if a constraint 
+     * violation occurs, and provides immediate error feedback to the user on the UI.
+     */
     fun transferFilesFromSensor() {
         val currentSessionId = uiState.currentSessionId
         if (currentSessionId == null) {
@@ -372,13 +380,42 @@ class ResearchViewModel(
         }
 
         viewModelScope.launch {
-            uiState = uiState.copy(
-                isLoading = true,
-                message = "Connecting to Bluetooth sensor..."
-            )
-
             try {
                 val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault()).format(java.util.Date())
+                val patientId = uiState.currentPatientId
+                val deviceId = 1L
+
+                // ------------------------------------------------------------------
+                // STEP 1: PRE-CHECK UNIQUENESS CONDITIONS BEFORE DISK WRITE!
+                // ------------------------------------------------------------------
+
+                // Check 1: Patient uniqueness for today
+                if (patientId != null) {
+                    val existingPatientSession = measurementRepository.getSessionByPatientDay(patientId, today)
+                    if (existingPatientSession != null && existingPatientSession.session_id != currentSessionId) {
+                        uiState = uiState.copy(
+                            message = "Error: A session already exists for this patient on $today!"
+                        )
+                        return@launch // STOP TRANSFER IMMEDIATELY
+                    }
+                }
+
+                // Check 2: Device uniqueness for today
+                val existingDeviceSession = measurementRepository.getSessionByDeviceAndDay(deviceId, today)
+                if (existingDeviceSession != null && existingDeviceSession.session_id != currentSessionId) {
+                    uiState = uiState.copy(
+                        message = "Error: Device D$deviceId was already used for another session on $today!"
+                    )
+                    return@launch // STOP TRANSFER IMMEDIATELY
+                }
+
+                // ------------------------------------------------------------------
+                // STEP 2: ALL CHECKS PASSED -> SAFE TO TRANSFER & WRITE TO DISK
+                // ------------------------------------------------------------------
+                uiState = uiState.copy(
+                    isLoading = true,
+                    message = "Pre-checks passed. Starting Bluetooth transfer..."
+                )
 
                 val transferredList = MeasurementSimulator.simulateSessionTransferFromSensor(
                     context = getApplication(),

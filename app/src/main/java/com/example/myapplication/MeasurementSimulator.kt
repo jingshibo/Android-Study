@@ -150,6 +150,10 @@ object MeasurementSimulator {
      * Simulates transferring 100 measurement files (25 time points x 4 repeats)
      * for ONE single session when that patient's sensor connects to the tablet over Bluetooth.
      * Includes a delay between each file to simulate real wireless transmission time.
+     *
+     * IMPORTANT ARCHITECTURAL NOTE:
+     * Callers (e.g. ViewModels) MUST execute session uniqueness pre-checks BEFORE invoking this 
+     * method to ensure no files are written to disk if a patient or device constraint fails.
      */
     suspend fun simulateSessionTransferFromSensor(
         context: Context,
