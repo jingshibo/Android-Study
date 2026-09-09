@@ -42,7 +42,7 @@ enum class PatientStatus {
 enum class SessionStatus {
     ON_SENSOR,
     TRANSFERRED,
-    ANALYSED,
+    EXPORTED,
     CORRUPTED
 }
 
@@ -66,10 +66,18 @@ enum class ChecksumStatus {
     FAIL
 }
 
-enum class PredictionLabel {
-    MF_POSITIVE,
-    MF_NEGATIVE,
-    UNCERTAIN
+enum class PredictionLabel(val displayName: String) {
+    MF_PLUS("MF+"),
+    MF_MINUS_LF_PLUS("MF-LF+"),
+    MF_MINUS("MF-"),
+    NOT_ANALYSED("not analysed")
+}
+
+enum class PredictStatus {
+    ON_SENSOR,
+    TRANSFERRED,
+    PREDICTED,
+    EXPORTED
 }
 
 const val AUTOSAVE_FILENAME = "autosave_measurements.csv"
@@ -448,7 +456,7 @@ class Converters {
         return try {
             PredictionLabel.valueOf(value)
         } catch (e: Exception) {
-            PredictionLabel.UNCERTAIN
+            PredictionLabel.NOT_ANALYSED
         }
     }
 }
@@ -558,8 +566,8 @@ data class ResultEntity(
     val prediction_id: Long = 0,
 
     val session_id: Long,
-    val model_name: String,
     val model_version: String,
+    val predict_status: PredictStatus = PredictStatus.PREDICTED,
     val prediction_label: PredictionLabel,
     val probability_json: String? = null,
     val confidence: Double? = null,
@@ -797,7 +805,7 @@ interface ResultDao {
     SELECT * FROM results
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
       AND (:predictionLabel IS NULL OR prediction_label = :predictionLabel)
-      AND (:modelName IS NULL OR model_name = :modelName)
+      AND (:predictStatus IS NULL OR predict_status = :predictStatus)
       AND (:modelVersion IS NULL OR model_version = :modelVersion)
       AND (:minConfidence IS NULL OR confidence >= :minConfidence)
       AND (:maxConfidence IS NULL OR confidence <= :maxConfidence)
@@ -809,7 +817,7 @@ interface ResultDao {
     suspend fun searchResults(
         sessionId: Long?,
         predictionLabel: String?,
-        modelName: String?,
+        predictStatus: String?,
         modelVersion: String?,
         minConfidence: Double?,
         maxConfidence: Double?,

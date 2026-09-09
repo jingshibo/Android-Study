@@ -245,7 +245,7 @@ class MeasurementRepository(
     suspend fun searchResults(
         sessionId: Long? = null,
         predictionLabel: PredictionLabel? = null,
-        modelName: String? = null,
+        predictStatus: PredictStatus? = null,
         modelVersion: String? = null,
         minConfidence: Double? = null,
         maxConfidence: Double? = null,
@@ -254,7 +254,7 @@ class MeasurementRepository(
     ): List<ResultEntity> = resultDao.searchResults(
         sessionId = sessionId,
         predictionLabel = predictionLabel?.name,
-        modelName = modelName,
+        predictStatus = predictStatus?.name,
         modelVersion = modelVersion,
         minConfidence = minConfidence,
         maxConfidence = maxConfidence,
@@ -266,12 +266,17 @@ class MeasurementRepository(
     suspend fun getLatestResultForSession(sessionId: Long): ResultEntity? =
         resultDao.getLatestResultBySession(sessionId)
 
-    /** Checks if a prediction result exists for a specific session, model name, and model version. */
-    suspend fun getResultByModel(
+    /** Checks if a prediction result exists for a specific session and model version. */
+    suspend fun getResultByModelVersion(
         sessionId: Long,
-        modelName: String,
         modelVersion: String
-    ): ResultEntity? = resultDao.getResultByModel(sessionId, modelName, modelVersion)
+    ): ResultEntity? = resultDao.getResultByModelVersion(sessionId, modelVersion)
+
+    /** Updates the prediction status of a result record. */
+    suspend fun updatePredictStatus(
+        predictionId: Long,
+        status: PredictStatus
+    ): Int = resultDao.updatePredictStatus(predictionId, status)
 
     /** Deletes a specific prediction result record by its prediction ID. */
     suspend fun deleteResult(predictionId: Long): Int = resultDao.deleteResultById(predictionId)
@@ -445,7 +450,19 @@ class Converters {
         return try {
             PredictionLabel.valueOf(value)
         } catch (e: Exception) {
-            PredictionLabel.UNCERTAIN
+            PredictionLabel.NOT_ANALYSED
+        }
+    }
+
+    @TypeConverter
+    fun fromPredictStatus(status: PredictStatus): String = status.name
+
+    @TypeConverter
+    fun toPredictStatus(value: String): PredictStatus {
+        return try {
+            PredictStatus.valueOf(value)
+        } catch (e: Exception) {
+            PredictStatus.PREDICTED
         }
     }
 }
@@ -563,7 +580,7 @@ data class MeasurementEntity(
         )
     ],
     indices = [
-        Index(value = ["session_id", "model_name", "model_version"], unique = true)
+        Index(value = ["session_id", "model_version"], unique = true)
     ]
 )
 data class ResultEntity(
@@ -571,8 +588,8 @@ data class ResultEntity(
     val prediction_id: Long = 0,
 
     val session_id: Long,
-    val model_name: String,
     val model_version: String,
+    val predict_status: PredictStatus = PredictStatus.PREDICTED,
     val prediction_label: PredictionLabel,
     val probability_json: String? = null,
     val confidence: Double? = null,
@@ -828,9 +845,13 @@ interface ResultDao {
     @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY predicted_at DESC LIMIT 1")
     suspend fun getLatestResultBySession(sessionId: Long): ResultEntity?
 
-    /** Retrieves a prediction result matching exact session ID, model name, and model version. */
-    @Query("SELECT * FROM results WHERE session_id = :sessionId AND model_name = :modelName AND model_version = :modelVersion LIMIT 1")
-    suspend fun getResultByModel(sessionId: Long, modelName: String, modelVersion: String): ResultEntity?
+    /** Retrieves a prediction result matching exact session ID and model version. */
+    @Query("SELECT * FROM results WHERE session_id = :sessionId AND model_version = :modelVersion LIMIT 1")
+    suspend fun getResultByModelVersion(sessionId: Long, modelVersion: String): ResultEntity?
+
+    /** Updates the prediction status of a specific result record. */
+    @Query("UPDATE results SET predict_status = :status WHERE prediction_id = :predictionId")
+    suspend fun updatePredictStatus(predictionId: Long, status: PredictStatus): Int
 
     /** Deletes a specific prediction result record by its ID. */
     @Query("DELETE FROM results WHERE prediction_id = :resultId")
@@ -846,7 +867,7 @@ interface ResultDao {
     SELECT * FROM results
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
       AND (:predictionLabel IS NULL OR prediction_label = :predictionLabel)
-      AND (:modelName IS NULL OR model_name = :modelName)
+      AND (:predictStatus IS NULL OR predict_status = :predictStatus)
       AND (:modelVersion IS NULL OR model_version = :modelVersion)
       AND (:minConfidence IS NULL OR confidence >= :minConfidence)
       AND (:maxConfidence IS NULL OR confidence <= :maxConfidence)
@@ -858,7 +879,7 @@ interface ResultDao {
     suspend fun searchResults(
         sessionId: Long?,
         predictionLabel: String?,
-        modelName: String?,
+        predictStatus: String?,
         modelVersion: String?,
         minConfidence: Double?,
         maxConfidence: Double?,
@@ -893,7 +914,7 @@ enum class PatientStatus {
 enum class SessionStatus {
     ON_SENSOR,
     TRANSFERRED,
-    ANALYSED,
+    EXPORTED,
     CORRUPTED
 }
 
@@ -903,6 +924,13 @@ enum class TransferStatus {
     MISSING, /** File was expected but not found on the sensor hardware. */
     CORRUPTED /** File was transferred, but data is damaged or incomplete. */
 
+}
+
+enum class PredictStatus {
+    ON_SENSOR,
+    TRANSFERRED,
+    PREDICTED,
+    EXPORTED
 }
 
 enum class SignalQuality {
@@ -918,8 +946,9 @@ enum class ChecksumStatus {
     FAIL
 }
 
-enum class PredictionLabel {
-    MF_POSITIVE,
-    MF_NEGATIVE,
-    UNCERTAIN
+enum class PredictionLabel(val displayName: String) {
+    MF_PLUS("MF+"),
+    MF_MINUS_LF_PLUS("MF-LF+"),
+    MF_MINUS("MF-"),
+    NOT_ANALYSED("not analysed")
 }
