@@ -193,7 +193,7 @@ class ResearchViewModel(
                     val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault()).format(java.util.Date())
 
                     // 1. Check if patient exists and notify user
-                    val existingPatient = measurementRepository.getPatientByCode(uiState.sampleId)
+                    val existingPatient = measurementRepository.findPatientByCode(uiState.sampleId)
                     val (patientId, patientNotice) = if (existingPatient != null) {
                         Pair(
                             existingPatient.patient_id,
@@ -210,7 +210,7 @@ class ResearchViewModel(
                     }
 
                     // 2. Check if session exists and notify user
-                    val existingSession = measurementRepository.getSessionByPatientDay(
+                    val existingSession = measurementRepository.findSessionByPatientDay(
                         patientId = patientId,
                         recordingDay = today
                     )
@@ -388,7 +388,7 @@ class ResearchViewModel(
 
                 // Check 1: Patient uniqueness for today
                 if (patientId != null) {
-                    val existingPatientSession = measurementRepository.getSessionByPatientDay(patientId, today)
+                    val existingPatientSession = measurementRepository.findSessionByPatientDay(patientId, today)
                     if (existingPatientSession != null && existingPatientSession.session_id != currentSessionId) {
                         uiState = uiState.copy(
                             message = "Error: A session already exists for this patient on $today!"
@@ -398,7 +398,7 @@ class ResearchViewModel(
                 }
 
                 // Check 2: Device uniqueness for today
-                val existingDeviceSession = measurementRepository.getSessionByDeviceAndDay(deviceId, today)
+                val existingDeviceSession = measurementRepository.findSessionByDeviceAndDay(deviceId, today)
                 if (existingDeviceSession != null && existingDeviceSession.session_id != currentSessionId) {
                     uiState = uiState.copy(
                         message = "Error: Device D$deviceId was already used for another session on $today!"

@@ -184,7 +184,7 @@ class ResearchViewModel(
                     val today = java.text.SimpleDateFormat("yyyy_MM_dd", java.util.Locale.getDefault()).format(java.util.Date())
 
                     // 1. Check if patient exists and notify user
-                    val existingPatient = measurementRepository.getPatientByCode(uiState.sampleId)
+                    val existingPatient = measurementRepository.findPatientByCode(uiState.sampleId)
                     val (patientId, patientNotice) = if (existingPatient != null) {
                         Pair(
                             existingPatient.patient_id,

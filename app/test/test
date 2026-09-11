@@ -124,7 +124,7 @@ class MeasurementRepository(
         location: String? = null,
         notes: String? = null
     ): Long {
-        val existing = patientDao.getPatientByCode(patientCode)
+        val existing = patientDao.findPatientByCode(patientCode)
         if (existing != null) {
             return existing.patient_id
         }
@@ -293,8 +293,8 @@ class MeasurementRepository(
         resultDao.getResultsBySession(sessionId)
 
     /** Retrieves the most recent prediction result for a session. */
-    suspend fun getLatestResultForSession(sessionId: Long): ResultEntity? =
-        resultDao.getLatestResultBySession(sessionId)
+    suspend fun findLatestResultForSession(sessionId: Long): ResultEntity? =
+        resultDao.findLatestResultBySession(sessionId)
 
     // ------------------------------------------------------------------------
     // Internal File Writing & CSV Import/Export Operations
@@ -658,8 +658,8 @@ interface PatientDao {
     suspend fun getAllPatients(): List<PatientEntity>
 
     /** Retrieves a single patient matching the exact patient code. */
-    @Query("SELECT * FROM patients WHERE patient_code = :patientCode LIMIT 1")
-    suspend fun getPatientByCode(patientCode: String): PatientEntity?
+    @Query("SELECT * FROM patients WHERE patient_code = :patientCode")
+    suspend fun findPatientByCode(patientCode: String): PatientEntity?
 
     /** Searches and filters patient records using multiple optional criteria. */
     @Query(
