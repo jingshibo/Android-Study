@@ -177,6 +177,10 @@ object MeasurementSimulator {
             repository.insertMeasurement(measurementMetaData)
             measurementMetaDataBatch.add(measurementMetaData)
 
+            // Update session progress and status in database incrementally
+            val status = if (measurementMetaDataBatch.size >= totalFiles) SessionTransferStatus.TRANSFERRED else SessionTransferStatus.PARTIALLY_TRANSFERRED
+            repository.updateSessionProgress(sessionId, measurementMetaDataBatch.size, status)
+
             // Report transfer progress to UI
             onProgressUpdate?.invoke(measurementMetaDataBatch.size, totalFiles, measurementMetaData)
         }

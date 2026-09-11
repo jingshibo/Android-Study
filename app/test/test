@@ -27,12 +27,6 @@ enum class SexGender {
     UNKNOWN
 }
 
-enum class Arm {
-    LEFT,
-    RIGHT,
-    UNKNOWN
-}
-
 enum class AgeGroup {
     CHILD,
     ADULT,
@@ -551,16 +545,25 @@ data class SessionEntity(
     @PrimaryKey(autoGenerate = true)
     val session_id: Long = 0,
 
-    val device_id: Long = 1,
     val patient_id: Long,
     val recording_day: String,
+    val device_id: Long = 1,
+    val arm: ArmSide = ArmSide.UNKNOWN,
     val start_time: Long? = null,
     val end_time: Long? = null,
     val recording_interval: Int = 10,
     val recording_repeats: Int = 5,
     val frequency_start_ghz: Double = 1.0,
     val frequency_end_ghz: Double = 6.0,
-    val session_status: SessionStatus = SessionStatus.ON_SENSOR,
+    val expected_file_count: Int? = null,
+    val transferred_file_count: Int = 0,
+    val transferred_at: Long? = null,
+    val modified_at: Long? = null,
+    val transfer_status: SessionTransferStatus = SessionTransferStatus.NOT_TRANSFERRED,
+    val completeness_status: SessionCompletenessStatus = SessionCompletenessStatus.NOT_CHECKED,
+    val validity_status: RecordValidityStatus = RecordValidityStatus.VALID,
+    val void_reason: String? = null,
+    val voided_at: Long? = null,
     val notes: String? = null
 )
 
@@ -657,16 +660,6 @@ interface PatientDao {
     /** Retrieves a single patient matching the exact patient code. */
     @Query("SELECT * FROM patients WHERE patient_code = :patientCode LIMIT 1")
     suspend fun getPatientByCode(patientCode: String): PatientEntity?
-
-    /** Finds patients whose patient code contains the given partial search query. */
-    @Query(
-        """
-    SELECT * FROM patients
-    WHERE patient_code LIKE '%' || :query || '%'
-    ORDER BY patient_code ASC
-    """
-    )
-    suspend fun getPatientByPartialCode(query: String): List<PatientEntity>
 
     /** Searches and filters patient records using multiple optional criteria. */
     @Query(

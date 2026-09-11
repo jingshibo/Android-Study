@@ -173,6 +173,14 @@ class MeasurementRepository(
         modifiedAt: Long = System.currentTimeMillis()
     ) = sessionDao.updateSessionTransferStatus(sessionId, status, modifiedAt)
 
+    /** Updates the transfer progress (file count) and status of a specific session. */
+    suspend fun updateSessionProgress(
+        sessionId: Long,
+        transferredFileCount: Int,
+        status: SessionTransferStatus,
+        modifiedAt: Long = System.currentTimeMillis()
+    ) = sessionDao.updateSessionProgress(sessionId, transferredFileCount, status, modifiedAt)
+
     /** Retrieves a session matching a specific patient and recording day. */
     suspend fun getSessionByPatientDay(
         patientId: Long,
@@ -191,13 +199,6 @@ class MeasurementRepository(
         deviceId: Long
     ): List<SessionEntity> = sessionDao.getSessionsByPatientAndDevice(patientId, deviceId)
 
-    /** Retrieves a session matching a specific patient and recording day combination. */
-    suspend fun getSessionByPatientDeviceDay(
-        patientId: Long,
-        deviceId: Long = 1L,
-        recordingDay: String
-    ): SessionEntity? = sessionDao.getSessionByPatientDay(patientId, recordingDay)
-
     /** Updates an existing measurement session record. */
     suspend fun updateSession(session: SessionEntity) = sessionDao.updateSession(session)
 
@@ -207,8 +208,6 @@ class MeasurementRepository(
     // ------------------------------------------------------------------------
     // Measurement File Operations
     // ------------------------------------------------------------------------
-
-    /** Inserts a single measurement file record into the database. */
 
     /** Inserts a single measurement file record into the database. */
     suspend fun insertMeasurement(measurementEntity: MeasurementEntity): Long =
@@ -418,179 +417,6 @@ abstract class ResearchDatabase : RoomDatabase() {
 }
 
 
-class Converters {
-    @TypeConverter
-    fun fromSexGender(sex: SexGender?): String? = sex?.name
-
-    @TypeConverter
-    fun toSexGender(value: String?): SexGender? {
-        return value?.let {
-            try { SexGender.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromArm(arm: Arm?): String? = arm?.name
-
-    @TypeConverter
-    fun toArm(value: String?): Arm? {
-        return value?.let {
-            try { Arm.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromAgeGroup(ageGroup: AgeGroup?): String? = ageGroup?.name
-
-    @TypeConverter
-    fun toAgeGroup(value: String?): AgeGroup? {
-        return value?.let {
-            try { AgeGroup.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromStudyGroup(studyGroup: StudyGroup?): String? = studyGroup?.name
-
-    @TypeConverter
-    fun toStudyGroup(value: String?): StudyGroup? {
-        return value?.let {
-            try { StudyGroup.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromRecordValidityStatus(status: RecordValidityStatus): String = status.name
-
-    @TypeConverter
-    fun toRecordValidityStatus(value: String): RecordValidityStatus {
-        return try {
-            RecordValidityStatus.valueOf(value)
-        } catch (e: Exception) {
-            RecordValidityStatus.VALID
-        }
-    }
-
-    @TypeConverter
-    fun fromSensorStatus(status: SensorStatus): String = status.name
-
-    @TypeConverter
-    fun toSensorStatus(value: String): SensorStatus {
-        return try {
-            SensorStatus.valueOf(value)
-        } catch (e: Exception) {
-            SensorStatus.NOT_CHECKED
-        }
-    }
-
-    @TypeConverter
-    fun fromSessionTransferStatus(status: SessionTransferStatus): String = status.name
-
-    @TypeConverter
-    fun toSessionTransferStatus(value: String): SessionTransferStatus {
-        return try {
-            SessionTransferStatus.valueOf(value)
-        } catch (e: Exception) {
-            SessionTransferStatus.NOT_TRANSFERRED
-        }
-    }
-
-    @TypeConverter
-    fun fromSessionCompletenessStatus(status: SessionCompletenessStatus): String = status.name
-
-    @TypeConverter
-    fun toSessionCompletenessStatus(value: String): SessionCompletenessStatus {
-        return try {
-            SessionCompletenessStatus.valueOf(value)
-        } catch (e: Exception) {
-            SessionCompletenessStatus.NOT_CHECKED
-        }
-    }
-
-    @TypeConverter
-    fun fromArmSide(arm: ArmSide): String = arm.name
-
-    @TypeConverter
-    fun toArmSide(value: String): ArmSide {
-        return try {
-            ArmSide.valueOf(value)
-        } catch (e: Exception) {
-            ArmSide.UNKNOWN
-        }
-    }
-
-    @TypeConverter
-    fun fromMeasurementTransferStatus(status: MeasurementTransferStatus): String = status.name
-
-    @TypeConverter
-    fun toMeasurementTransferStatus(value: String): MeasurementTransferStatus {
-        return try {
-            MeasurementTransferStatus.valueOf(value)
-        } catch (e: Exception) {
-            MeasurementTransferStatus.NOT_TRANSFERRED
-        }
-    }
-
-    @TypeConverter
-    fun fromFileCompletenessStatus(status: FileCompletenessStatus): String = status.name
-
-    @TypeConverter
-    fun toFileCompletenessStatus(value: String): FileCompletenessStatus {
-        return try {
-            FileCompletenessStatus.valueOf(value)
-        } catch (e: Exception) {
-            FileCompletenessStatus.NOT_CHECKED
-        }
-    }
-
-    @TypeConverter
-    fun fromChecksumStatus(status: ChecksumStatus): String = status.name
-
-    @TypeConverter
-    fun toChecksumStatus(value: String): ChecksumStatus {
-        return try {
-            ChecksumStatus.valueOf(value)
-        } catch (e: Exception) {
-            ChecksumStatus.NOT_CHECKED
-        }
-    }
-
-    @TypeConverter
-    fun fromPredictionLabel(label: PredictionLabel?): String? = label?.name
-
-    @TypeConverter
-    fun toPredictionLabel(value: String?): PredictionLabel? {
-        return value?.let {
-            try { PredictionLabel.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromAnalysisStatus(status: AnalysisStatus): String = status.name
-
-    @TypeConverter
-    fun toAnalysisStatus(value: String): AnalysisStatus {
-        return try {
-            AnalysisStatus.valueOf(value)
-        } catch (e: Exception) {
-            AnalysisStatus.ANALYZED
-        }
-    }
-
-    @TypeConverter
-    fun fromExportStatus(status: ExportStatus): String = status.name
-
-    @TypeConverter
-    fun toExportStatus(value: String): ExportStatus {
-        return try {
-            ExportStatus.valueOf(value)
-        } catch (e: Exception) {
-            ExportStatus.NOT_EXPORTED
-        }
-    }
-}
-
-
 /**
  * Database Entity (Table) Definition
  */
@@ -685,6 +511,8 @@ data class SessionEntity(
     val recording_repeats: Int = 5,
     val frequency_start_ghz: Double = 1.0,
     val frequency_end_ghz: Double = 6.0,
+    val expected_file_count: Int? = null,
+    val transferred_file_count: Int = 0,
     val transferred_at: Long? = null,
     val modified_at: Long? = null,
     val transfer_status: SessionTransferStatus = SessionTransferStatus.NOT_TRANSFERRED,
@@ -786,16 +614,6 @@ interface PatientDao {
     /** Retrieves a single patient matching the exact patient code. */
     @Query("SELECT * FROM patients WHERE patient_code = :patientCode LIMIT 1")
     suspend fun getPatientByCode(patientCode: String): PatientEntity?
-
-    /** Finds patients whose patient code contains the given partial search query. */
-    @Query(
-        """
-    SELECT * FROM patients
-    WHERE patient_code LIKE '%' || :query || '%'
-    ORDER BY patient_code ASC
-    """
-    )
-    suspend fun getPatientByPartialCode(query: String): List<PatientEntity>
 
     /** Searches and filters patient records using multiple optional criteria. */
     @Query(
@@ -918,6 +736,15 @@ interface SessionDao {
     /** Updates the transfer status of a specific measurement session. */
     @Query("UPDATE sessions SET transfer_status = :status, modified_at = :modifiedAt WHERE session_id = :sessionId")
     suspend fun updateSessionTransferStatus(sessionId: Long, status: SessionTransferStatus, modifiedAt: Long = System.currentTimeMillis())
+
+    /** Updates the transferred file count and transfer status for a session. */
+    @Query("UPDATE sessions SET transferred_file_count = :transferredFileCount, transfer_status = :status, modified_at = :modifiedAt WHERE session_id = :sessionId")
+    suspend fun updateSessionProgress(
+        sessionId: Long,
+        transferredFileCount: Int,
+        status: SessionTransferStatus,
+        modifiedAt: Long = System.currentTimeMillis()
+    )
 
     /** Deletes a session by its ID, cascading deletion to associated measurements and results. */
     @Query("DELETE FROM sessions WHERE session_id = :sessionId")
@@ -1115,12 +942,6 @@ enum class SexGender {
     UNKNOWN
 }
 
-enum class Arm {
-    LEFT,
-    RIGHT,
-    UNKNOWN
-}
-
 enum class AgeGroup {
     CHILD,
     ADULT,
@@ -1206,4 +1027,167 @@ enum class PredictionLabel(val displayName: String) {
     MF_MINUS_LF_PLUS("MF-LF+"),
     MF_MINUS("MF-"),
     NOT_ANALYSED("not analysed")
+}
+
+
+class Converters {
+    @TypeConverter
+    fun fromSexGender(sex: SexGender?): String? = sex?.name
+
+    @TypeConverter
+    fun toSexGender(value: String?): SexGender? {
+        return value?.let {
+            try { SexGender.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromAgeGroup(ageGroup: AgeGroup?): String? = ageGroup?.name
+
+    @TypeConverter
+    fun toAgeGroup(value: String?): AgeGroup? {
+        return value?.let {
+            try { AgeGroup.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromStudyGroup(studyGroup: StudyGroup?): String? = studyGroup?.name
+
+    @TypeConverter
+    fun toStudyGroup(value: String?): StudyGroup? {
+        return value?.let {
+            try { StudyGroup.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromRecordValidityStatus(status: RecordValidityStatus): String = status.name
+
+    @TypeConverter
+    fun toRecordValidityStatus(value: String): RecordValidityStatus {
+        return try {
+            RecordValidityStatus.valueOf(value)
+        } catch (e: Exception) {
+            RecordValidityStatus.VALID
+        }
+    }
+
+    @TypeConverter
+    fun fromSensorStatus(status: SensorStatus): String = status.name
+
+    @TypeConverter
+    fun toSensorStatus(value: String): SensorStatus {
+        return try {
+            SensorStatus.valueOf(value)
+        } catch (e: Exception) {
+            SensorStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromSessionTransferStatus(status: SessionTransferStatus): String = status.name
+
+    @TypeConverter
+    fun toSessionTransferStatus(value: String): SessionTransferStatus {
+        return try {
+            SessionTransferStatus.valueOf(value)
+        } catch (e: Exception) {
+            SessionTransferStatus.NOT_TRANSFERRED
+        }
+    }
+
+    @TypeConverter
+    fun fromSessionCompletenessStatus(status: SessionCompletenessStatus): String = status.name
+
+    @TypeConverter
+    fun toSessionCompletenessStatus(value: String): SessionCompletenessStatus {
+        return try {
+            SessionCompletenessStatus.valueOf(value)
+        } catch (e: Exception) {
+            SessionCompletenessStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromArmSide(arm: ArmSide): String = arm.name
+
+    @TypeConverter
+    fun toArmSide(value: String): ArmSide {
+        return try {
+            ArmSide.valueOf(value)
+        } catch (e: Exception) {
+            ArmSide.UNKNOWN
+        }
+    }
+
+    @TypeConverter
+    fun fromMeasurementTransferStatus(status: MeasurementTransferStatus): String = status.name
+
+    @TypeConverter
+    fun toMeasurementTransferStatus(value: String): MeasurementTransferStatus {
+        return try {
+            MeasurementTransferStatus.valueOf(value)
+        } catch (e: Exception) {
+            MeasurementTransferStatus.NOT_TRANSFERRED
+        }
+    }
+
+    @TypeConverter
+    fun fromFileCompletenessStatus(status: FileCompletenessStatus): String = status.name
+
+    @TypeConverter
+    fun toFileCompletenessStatus(value: String): FileCompletenessStatus {
+        return try {
+            FileCompletenessStatus.valueOf(value)
+        } catch (e: Exception) {
+            FileCompletenessStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromChecksumStatus(status: ChecksumStatus): String = status.name
+
+    @TypeConverter
+    fun toChecksumStatus(value: String): ChecksumStatus {
+        return try {
+            ChecksumStatus.valueOf(value)
+        } catch (e: Exception) {
+            ChecksumStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromPredictionLabel(label: PredictionLabel?): String? = label?.name
+
+    @TypeConverter
+    fun toPredictionLabel(value: String?): PredictionLabel? {
+        return value?.let {
+            try { PredictionLabel.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromAnalysisStatus(status: AnalysisStatus): String = status.name
+
+    @TypeConverter
+    fun toAnalysisStatus(value: String): AnalysisStatus {
+        return try {
+            AnalysisStatus.valueOf(value)
+        } catch (e: Exception) {
+            AnalysisStatus.ANALYZED
+        }
+    }
+
+    @TypeConverter
+    fun fromExportStatus(status: ExportStatus): String = status.name
+
+    @TypeConverter
+    fun toExportStatus(value: String): ExportStatus {
+        return try {
+            ExportStatus.valueOf(value)
+        } catch (e: Exception) {
+            ExportStatus.NOT_EXPORTED
+        }
+    }
 }

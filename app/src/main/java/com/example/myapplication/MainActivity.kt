@@ -210,9 +210,8 @@ class ResearchViewModel(
                     }
 
                     // 2. Check if session exists and notify user
-                    val existingSession = measurementRepository.getSessionByPatientDeviceDay(
+                    val existingSession = measurementRepository.getSessionByPatientDay(
                         patientId = patientId,
-                        deviceId = 1L,
                         recordingDay = today
                     )
 
