@@ -283,8 +283,6 @@ class ResearchViewModel(
         val newMeasurement = MeasurementSimulator.createSimulatedMeasurementAndSave(
             context = getApplication(),
             sessionId = currentSessionId,
-            recordingIndex = countForThisSession,
-            repeatIndex = 1,
             fileIndex = countForThisSession
         )
 
@@ -520,7 +518,7 @@ fun ResearchScreenContent(
         }
     )
 
-    val transferredCount = uiState.measurementEntities.count { it.transfer_status == TransferStatus.TRANSFERRED }
+    val transferredCount = uiState.measurementEntities.count { it.transfer_status == MeasurementTransferStatus.TRANSFERRED }
     val latestFileName = uiState.measurementEntities.lastOrNull()?.sensor_file_name ?: "--"
 
     /**
@@ -742,19 +740,10 @@ fun MeasurementRow(
                 text = "Tablet File: ${measurementEntity.tablet_file_name}",
                 style = MaterialTheme.typography.bodySmall
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Rec Index: ${measurementEntity.recording_index}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    text = "Repeat Index: ${measurementEntity.repeat_index}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            Text(
+                text = "File Index: ${measurementEntity.file_index ?: "--"}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }

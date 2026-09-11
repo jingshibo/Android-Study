@@ -44,23 +44,23 @@ object MeasurementFileUtil {
         measurementEntityList: List<MeasurementEntity>
     ): String {
         val header =
-            "file_id,session_id,sensor_file_name,tablet_file_name,tablet_file_path,recording_index,repeat_index,file_index,recorded_at,transferred_at,transfer_status,signal_quality,checksum,file_size_bytes,notes"
+            "file_id,session_id,sensor_file_name,tablet_file_name,tablet_file_path,file_index,recorded_at,transferred_at,transfer_status,file_completeness_status,checksum,checksum_status,file_size_bytes,modified_at,notes"
         val rows =
             measurementEntityList.joinToString(separator = "\n") { m ->
                 "${m.file_id}," +
                         "${m.session_id}," +
                         "${escapeCsv(m.sensor_file_name)}," +
-                        "${escapeCsv(m.tablet_file_name)}," +
-                        "${escapeCsv(m.tablet_file_path)}," +
-                        "${m.recording_index}," +
-                        "${m.repeat_index}," +
+                        "${escapeCsv(m.tablet_file_name ?: "")}," +
+                        "${escapeCsv(m.tablet_file_path ?: "")}," +
                         "${m.file_index ?: ""}," +
                         "${m.recorded_at ?: ""}," +
                         "${m.transferred_at ?: ""}," +
-                        "${escapeCsv(m.transfer_status?.name ?: "")}," +
-                        "${escapeCsv(m.signal_quality?.name ?: "")}," +
-                        "${escapeCsv(m.checksum?.name ?: "")}," +
+                        "${escapeCsv(m.transfer_status.name)}," +
+                        "${escapeCsv(m.file_completeness_status.name)}," +
+                        "${escapeCsv(m.checksum ?: "")}," +
+                        "${escapeCsv(m.checksum_status.name)}," +
                         "${m.file_size_bytes ?: ""}," +
+                        "${m.modified_at ?: ""}," +
                         "${escapeCsv(m.notes ?: "")}"
             }
         return "$header\n$rows"
@@ -83,30 +83,30 @@ object MeasurementFileUtil {
             .mapNotNull { line ->
                 val parts = line.split(",")
 
-                if (parts.size < 7) {
+                if (parts.size < 5) {
                     return@mapNotNull null
                 }
 
                 val file_id = parts[0].toLongOrNull() ?: 0L
                 val session_id = parts[1].toLongOrNull() ?: return@mapNotNull null
                 val sensor_file_name = parts[2]
-                val tablet_file_name = parts[3]
-                val tablet_file_path = parts[4]
-                val recording_index = parts[5].toIntOrNull() ?: return@mapNotNull null
-                val repeat_index = parts[6].toIntOrNull() ?: return@mapNotNull null
-                val file_index = parts.getOrNull(7)?.toIntOrNull()
-                val recorded_at = parts.getOrNull(8)?.toLongOrNull()
-                val transferred_at = parts.getOrNull(9)?.toLongOrNull()
-                val transfer_status = parts.getOrNull(10)?.let {
-                    try { TransferStatus.valueOf(it) } catch (e: Exception) { null }
-                }
-                val signal_quality = parts.getOrNull(11)?.let {
-                    try { SignalQuality.valueOf(it) } catch (e: Exception) { null }
-                }
-                val checksum = parts.getOrNull(12)?.let {
+                val tablet_file_name = parts[3].ifBlank { null }
+                val tablet_file_path = parts[4].ifBlank { null }
+                val file_index = parts.getOrNull(5)?.toIntOrNull()
+                val recorded_at = parts.getOrNull(6)?.toLongOrNull()
+                val transferred_at = parts.getOrNull(7)?.toLongOrNull()
+                val transfer_status = parts.getOrNull(8)?.let {
+                    try { MeasurementTransferStatus.valueOf(it) } catch (e: Exception) { null }
+                } ?: MeasurementTransferStatus.NOT_TRANSFERRED
+                val file_completeness_status = parts.getOrNull(9)?.let {
+                    try { FileCompletenessStatus.valueOf(it) } catch (e: Exception) { null }
+                } ?: FileCompletenessStatus.NOT_CHECKED
+                val checksum = parts.getOrNull(10)?.ifBlank { null }
+                val checksum_status = parts.getOrNull(11)?.let {
                     try { ChecksumStatus.valueOf(it) } catch (e: Exception) { null }
-                }
-                val file_size_bytes = parts.getOrNull(13)?.toLongOrNull()
+                } ?: ChecksumStatus.NOT_CHECKED
+                val file_size_bytes = parts.getOrNull(12)?.toLongOrNull()
+                val modified_at = parts.getOrNull(13)?.toLongOrNull()
                 val notes = parts.getOrNull(14)?.ifBlank { null }
 
                 MeasurementEntity(
@@ -115,15 +115,15 @@ object MeasurementFileUtil {
                     sensor_file_name = sensor_file_name,
                     tablet_file_name = tablet_file_name,
                     tablet_file_path = tablet_file_path,
-                    recording_index = recording_index,
-                    repeat_index = repeat_index,
                     file_index = file_index,
                     recorded_at = recorded_at,
                     transferred_at = transferred_at,
                     transfer_status = transfer_status,
-                    signal_quality = signal_quality,
+                    file_completeness_status = file_completeness_status,
                     checksum = checksum,
+                    checksum_status = checksum_status,
                     file_size_bytes = file_size_bytes,
+                    modified_at = modified_at,
                     notes = notes
                 )
             }

@@ -20,7 +20,7 @@ import androidx.room.Update
 /**
  * Class definition & Enums
  */
-enum class PatientSex {
+enum class SexGender {
     MALE,
     FEMALE,
     OTHER,
@@ -33,10 +33,30 @@ enum class Arm {
     UNKNOWN
 }
 
-enum class PatientStatus {
+enum class AgeGroup {
+    CHILD,
+    ADULT,
+    OLDER_ADULT,
+    UNKNOWN
+}
+
+enum class StudyGroup {
     MF_POSITIVE,
-    MF_NEGATIVE,
+    MF_NEGATIVE_LF_POSITIVE,
+    CONTROL,
     UNCERTAIN
+}
+
+enum class RecordValidityStatus {
+    VALID,
+    VOIDED
+}
+
+enum class SensorStatus {
+    NOT_CHECKED,
+    OK,
+    WARNING,
+    ERROR
 }
 
 enum class SessionStatus {
@@ -212,16 +232,13 @@ class MeasurementRepository(
     /** Creates a simulated measurement entity for testing. */
     fun createSimulatedMeasurement(
         session_id: Long,
-        recording_index: Int = 1,
-        repeat_index: Int = 1,
-        file_index: Int? = null
+        file_index: Int = 1
     ): MeasurementEntity {
         val now = System.currentTimeMillis()
         val timestampStr =
             java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
                 .format(java.util.Date(now))
-        val sensorFileName =
-            "R${"%03d".format(recording_index)}_Rep${"%02d".format(repeat_index)}_$now"
+        val sensorFileName = "File_${"%03d".format(file_index)}_$now"
         val tabletFileName = "D003_P001_${timestampStr}_$sensorFileName"
         val tabletFilePath = "export/$tabletFileName"
 
@@ -230,12 +247,10 @@ class MeasurementRepository(
             sensor_file_name = sensorFileName,
             tablet_file_name = tabletFileName,
             tablet_file_path = tabletFilePath,
-            recording_index = recording_index,
-            repeat_index = repeat_index,
-            file_index = file_index ?: recording_index,
+            file_index = file_index,
             recorded_at = now,
             transferred_at = now,
-            transfer_status = TransferStatus.TRANSFERRED
+            transfer_status = MeasurementTransferStatus.TRANSFERRED
         )
     }
 
@@ -385,12 +400,12 @@ class Converters {
     }
 
     @TypeConverter
-    fun fromPatientSex(sex: PatientSex?): String? = sex?.name
+    fun fromSexGender(sex: SexGender?): String? = sex?.name
 
     @TypeConverter
-    fun toPatientSex(value: String?): PatientSex? {
+    fun toSexGender(value: String?): SexGender? {
         return value?.let {
-            try { PatientSex.valueOf(it) } catch (e: Exception) { null }
+            try { SexGender.valueOf(it) } catch (e: Exception) { null }
         }
     }
 
@@ -405,12 +420,46 @@ class Converters {
     }
 
     @TypeConverter
-    fun fromPatientConditionStatus(status: PatientStatus?): String? = status?.name
+    fun fromAgeGroup(ageGroup: AgeGroup?): String? = ageGroup?.name
 
     @TypeConverter
-    fun toPatientConditionStatus(value: String?): PatientStatus? {
+    fun toAgeGroup(value: String?): AgeGroup? {
         return value?.let {
-            try { PatientStatus.valueOf(it) } catch (e: Exception) { null }
+            try { AgeGroup.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromStudyGroup(studyGroup: StudyGroup?): String? = studyGroup?.name
+
+    @TypeConverter
+    fun toStudyGroup(value: String?): StudyGroup? {
+        return value?.let {
+            try { StudyGroup.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromRecordValidityStatus(status: RecordValidityStatus): String = status.name
+
+    @TypeConverter
+    fun toRecordValidityStatus(value: String): RecordValidityStatus {
+        return try {
+            RecordValidityStatus.valueOf(value)
+        } catch (e: Exception) {
+            RecordValidityStatus.VALID
+        }
+    }
+
+    @TypeConverter
+    fun fromSensorStatus(status: SensorStatus): String = status.name
+
+    @TypeConverter
+    fun toSensorStatus(value: String): SensorStatus {
+        return try {
+            SensorStatus.valueOf(value)
+        } catch (e: Exception) {
+            SensorStatus.NOT_CHECKED
         }
     }
 
@@ -474,12 +523,15 @@ data class PatientEntity(
     val patient_id: Long = 0,
 
     val patient_code: String,
-    val sex: PatientSex? = null,
-    val age: Int? = null,
-    val arm: Arm? = null,
-    val status: PatientStatus? = null,
+    val sex: SexGender? = null,
+    val age: AgeGroup? = null,
+    val study_group: StudyGroup? = null,
     val location: String? = null,
     val created_at: Long = System.currentTimeMillis(),
+    val modified_at: Long? = null,
+    val validity_status: RecordValidityStatus = RecordValidityStatus.VALID,
+    val void_reason: String? = null,
+    val voided_at: Long? = null,
     val notes: String? = null
 )
 
@@ -491,26 +543,42 @@ data class PatientEntity(
             parentColumns = ["patient_id"],
             childColumns = ["patient_id"],
             onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = DeviceEntity::class,
+            parentColumns = ["device_id"],
+            childColumns = ["device_id"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
     indices = [
-        Index(value = ["patient_id", "device_id", "recording_day"], unique = true)
+        Index(value = ["patient_id", "recording_day"], unique = true),
+        Index(value = ["device_id", "recording_day"], unique = true)
     ]
 )
 data class SessionEntity(
     @PrimaryKey(autoGenerate = true)
     val session_id: Long = 0,
 
-    val device_id: Long = 1,
     val patient_id: Long,
     val recording_day: String,
+    val device_id: Long = 1,
+    val arm: ArmSide = ArmSide.UNKNOWN,
     val start_time: Long? = null,
     val end_time: Long? = null,
     val recording_interval: Int = 10,
     val recording_repeats: Int = 5,
     val frequency_start_ghz: Double = 1.0,
     val frequency_end_ghz: Double = 6.0,
-    val session_status: SessionStatus = SessionStatus.ON_SENSOR,
+    val transferred_at: Long? = null,
+    val modified_at: Long? = null,
+    val transfer_status: SessionTransferStatus = SessionTransferStatus.NOT_TRANSFERRED,
+    val completeness_status: SessionCompletenessStatus = SessionCompletenessStatus.NOT_CHECKED,
+    val validity_status: RecordValidityStatus = RecordValidityStatus.VALID,
+    val void_reason: String? = null,
+    val voided_at: Long? = null,
+    val notes: String? = null
+)
     val notes: String? = null
 )
 
@@ -535,17 +603,19 @@ data class MeasurementEntity(
 
     val session_id: Long,
     val sensor_file_name: String,
-    val tablet_file_name: String,
-    val tablet_file_path: String,
+    val tablet_file_name: String? = null,
+    val tablet_file_path: String? = null,
     val recording_index: Int,
     val repeat_index: Int,
     val file_index: Int? = null,
     val recorded_at: Long? = null,
     val transferred_at: Long? = null,
-    val transfer_status: TransferStatus = TransferStatus.ON_SENSOR,
-    val signal_quality: SignalQuality? = null,
-    val checksum: ChecksumStatus? = null,
+    val transfer_status: MeasurementTransferStatus = MeasurementTransferStatus.NOT_TRANSFERRED,
+    val file_completeness_status: FileCompletenessStatus = FileCompletenessStatus.NOT_CHECKED,
+    val checksum: String? = null,
+    val checksum_status: ChecksumStatus = ChecksumStatus.NOT_CHECKED,
     val file_size_bytes: Long? = null,
+    val modified_at: Long? = null,
     val notes: String? = null
 )
 
@@ -563,16 +633,23 @@ data class MeasurementEntity(
 )
 data class ResultEntity(
     @PrimaryKey(autoGenerate = true)
-    val prediction_id: Long = 0,
+    val result_id: Long = 0,
 
     val session_id: Long,
     val model_version: String,
-    val predict_status: PredictStatus = PredictStatus.PREDICTED,
-    val prediction_label: PredictionLabel,
+    val preprocessing_version: String? = null,
+    val analysis_config_json: String? = null,
+    val prediction_label: PredictionLabel? = null,
     val probability_json: String? = null,
     val confidence: Double? = null,
     val input_file_count: Int? = null,
-    val predicted_at: Long = System.currentTimeMillis(),
+    val analysis_status: AnalysisStatus = AnalysisStatus.ANALYZED,
+    val analyzed_at: Long = System.currentTimeMillis(),
+    val export_status: ExportStatus = ExportStatus.NOT_EXPORTED,
+    val exported_at: Long? = null,
+    val modified_at: Long? = null,
+    val notes: String? = null
+)
     val notes: String? = null
 )
 
@@ -615,22 +692,20 @@ interface PatientDao {
     SELECT * FROM patients
     WHERE (:patientCodeQuery IS NULL OR patient_code LIKE '%' || :patientCodeQuery || '%')
       AND (:sex IS NULL OR sex = :sex)
-      AND (:minAge IS NULL OR age >= :minAge)
-      AND (:maxAge IS NULL OR age <= :maxAge)
-      AND (:arm IS NULL OR arm = :arm)
-      AND (:status IS NULL OR status = :status)
+      AND (:ageGroup IS NULL OR age = :ageGroup)
+      AND (:studyGroup IS NULL OR study_group = :studyGroup)
       AND (:location IS NULL OR location = :location)
+      AND (:validityStatus IS NULL OR validity_status = :validityStatus)
     ORDER BY patient_code ASC
     """
     )
     suspend fun searchPatients(
         patientCodeQuery: String?,
         sex: String?,
-        minAge: Int?,
-        maxAge: Int?,
-        arm: String?,
-        status: String?,
-        location: String?
+        ageGroup: String?,
+        studyGroup: String?,
+        location: String?,
+        validityStatus: String?
     ): List<PatientEntity>
 }
 
@@ -746,8 +821,6 @@ interface MeasurementDao {
         """
     SELECT * FROM measurements
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
-      AND (:recordingIndex IS NULL OR recording_index = :recordingIndex)
-      AND (:repeatIndex IS NULL OR repeat_index = :repeatIndex)
       AND (:transferStatus IS NULL OR transfer_status = :transferStatus)
       AND (:sensorFileName IS NULL OR sensor_file_name LIKE '%' || :sensorFileName || '%')
       AND (:tabletFileName IS NULL OR tablet_file_name LIKE '%' || :tabletFileName || '%')
@@ -755,13 +828,11 @@ interface MeasurementDao {
       AND (:maxFileSizeBytes IS NULL OR file_size_bytes <= :maxFileSizeBytes)
       AND (:fromTransferredAt IS NULL OR transferred_at >= :fromTransferredAt)
       AND (:toTransferredAt IS NULL OR transferred_at <= :toTransferredAt)
-    ORDER BY session_id DESC, recording_index ASC, repeat_index ASC
+    ORDER BY session_id DESC, file_id ASC
     """
     )
     suspend fun searchMeasurements(
         sessionId: Long?,
-        recordingIndex: Int?,
-        repeatIndex: Int?,
         transferStatus: String?,
         sensorFileName: String?,
         tabletFileName: String?,

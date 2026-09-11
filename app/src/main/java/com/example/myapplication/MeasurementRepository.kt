@@ -31,6 +31,7 @@ class MeasurementRepository(
     private val database = ResearchDatabase.getDatabase(context)
 
     private val patientDao = database.patientDao()
+    private val deviceDao = database.deviceDao()
     private val sessionDao = database.sessionDao()
     private val measurementDao = database.measurementDao()
     private val resultDao = database.resultDao()
@@ -63,22 +64,61 @@ class MeasurementRepository(
      * With all parameters null, searchPatients() returns all patients. */
     suspend fun searchPatients(
         patientCodeQuery: String? = null,
-        sex: PatientSex? = null,
-        minAge: Int? = null,
-        maxAge: Int? = null,
-        status: PatientStatus? = null,
-        location: String? = null
+        sex: SexGender? = null,
+        ageGroup: AgeGroup? = null,
+        studyGroup: StudyGroup? = null,
+        location: String? = null,
+        validityStatus: RecordValidityStatus? = null
     ): List<PatientEntity> = patientDao.searchPatients(
         patientCodeQuery = patientCodeQuery,
         sex = sex?.name,
-        minAge = minAge,
-        maxAge = maxAge,
-        status = status?.name,
-        location = location
+        ageGroup = ageGroup?.name,
+        studyGroup = studyGroup?.name,
+        location = location,
+        validityStatus = validityStatus?.name
     )
 
     /** Updates an existing patient record. */
     suspend fun updatePatient(patient: PatientEntity) = patientDao.updatePatient(patient)
+
+    // ------------------------------------------------------------------------
+    // Device Operations
+    // ------------------------------------------------------------------------
+
+    /** Inserts a new device record into the database. */
+    suspend fun insertDevice(device: DeviceEntity): Long = deviceDao.insertDevice(device)
+
+    /** Retrieves a device record matching the exact device code, or null if not found. */
+    suspend fun getDeviceByCode(deviceCode: String): DeviceEntity? = deviceDao.getDeviceByCode(deviceCode)
+
+    /** Retrieves an existing device by device_code, or creates a new one if not found. */
+    suspend fun getOrCreateDevice(device: DeviceEntity): Long {
+        val existing = deviceDao.getDeviceByCode(device.device_code)
+        if (existing != null) {
+            return existing.device_id
+        }
+        return deviceDao.insertDevice(device)
+    }
+
+    /** Helper overload to retrieve or create a device by deviceCode string. */
+    suspend fun getOrCreateDevice(deviceCode: String): Long {
+        return getOrCreateDevice(DeviceEntity(device_code = deviceCode))
+    }
+
+    /** Searches devices by flexible criteria. */
+    suspend fun searchDevices(
+        deviceCodeQuery: String? = null,
+        sensorStatus: SensorStatus? = null
+    ): List<DeviceEntity> = deviceDao.searchDevices(
+        deviceCodeQuery = deviceCodeQuery,
+        sensorStatus = sensorStatus?.name
+    )
+
+    /** Updates an existing device record. */
+    suspend fun updateDevice(device: DeviceEntity) = deviceDao.updateDevice(device)
+
+    /** Deletes a device by ID. */
+    suspend fun deleteDevice(deviceId: Long): Int = deviceDao.deleteDeviceById(deviceId)
 
     // ------------------------------------------------------------------------
     // Session Operations
@@ -104,9 +144,10 @@ class MeasurementRepository(
         patientId: Long? = null,
         deviceId: Long? = null,
         recordingDay: String? = null,
-        arm: Arm? = null,
-        sessionStatus: SessionStatus? = null,
-        signalQuality: SignalQuality? = null,
+        arm: ArmSide? = null,
+        transferStatus: SessionTransferStatus? = null,
+        completenessStatus: SessionCompletenessStatus? = null,
+        validityStatus: RecordValidityStatus? = null,
         recordingInterval: Int? = null,
         recordingRepeats: Int? = null,
         frequencyStartGhz: Double? = null,
@@ -116,13 +157,21 @@ class MeasurementRepository(
         deviceId = deviceId,
         recordingDay = recordingDay,
         arm = arm?.name,
-        sessionStatus = sessionStatus?.name,
-        signalQuality = signalQuality?.name,
+        transferStatus = transferStatus?.name,
+        completenessStatus = completenessStatus?.name,
+        validityStatus = validityStatus?.name,
         recordingInterval = recordingInterval,
         recordingRepeats = recordingRepeats,
         frequencyStartGhz = frequencyStartGhz,
         frequencyEndGhz = frequencyEndGhz
     )
+
+    /** Updates the transfer status of a specific session. */
+    suspend fun updateSessionTransferStatus(
+        sessionId: Long,
+        status: SessionTransferStatus,
+        modifiedAt: Long = System.currentTimeMillis()
+    ) = sessionDao.updateSessionTransferStatus(sessionId, status, modifiedAt)
 
     /** Retrieves a session matching a specific patient and recording day. */
     suspend fun getSessionByPatientDay(
@@ -152,10 +201,6 @@ class MeasurementRepository(
     /** Updates an existing measurement session record. */
     suspend fun updateSession(session: SessionEntity) = sessionDao.updateSession(session)
 
-    /** Updates the status of a specific session. */
-    suspend fun updateSessionStatus(sessionId: Long, status: SessionStatus?) =
-        sessionDao.updateSessionStatus(sessionId, status)
-
     /** Deletes a session and all its associated measurements and results. */
     suspend fun deleteSession(sessionId: Long): Int = sessionDao.deleteSessionById(sessionId)
 
@@ -180,9 +225,9 @@ class MeasurementRepository(
     /** Searches and filters measurement file records using flexible optional criteria. */
     suspend fun searchMeasurements(
         sessionId: Long? = null,
-        recordingIndex: Int? = null,
-        repeatIndex: Int? = null,
-        transferStatus: TransferStatus? = null,
+        transferStatus: MeasurementTransferStatus? = null,
+        fileCompletenessStatus: FileCompletenessStatus? = null,
+        checksumStatus: ChecksumStatus? = null,
         sensorFileName: String? = null,
         tabletFileName: String? = null,
         minFileSizeBytes: Long? = null,
@@ -191,9 +236,9 @@ class MeasurementRepository(
         toTransferredAt: Long? = null
     ): List<MeasurementEntity> = measurementDao.searchMeasurements(
         sessionId = sessionId,
-        recordingIndex = recordingIndex,
-        repeatIndex = repeatIndex,
         transferStatus = transferStatus?.name,
+        fileCompletenessStatus = fileCompletenessStatus?.name,
+        checksumStatus = checksumStatus?.name,
         sensorFileName = sensorFileName,
         tabletFileName = tabletFileName,
         minFileSizeBytes = minFileSizeBytes,
@@ -213,11 +258,12 @@ class MeasurementRepository(
     /** Updates the transfer status and details for a measurement file. */
     suspend fun updateTransferDetails(
         fileId: Long,
-        status: TransferStatus?,
+        status: MeasurementTransferStatus,
         transferredAt: Long? = System.currentTimeMillis(),
-        checksum: ChecksumStatus? = null,
+        checksum: String? = null,
+        checksumStatus: ChecksumStatus = ChecksumStatus.NOT_CHECKED,
         fileSizeBytes: Long? = null
-    ) = measurementDao.updateTransferDetails(fileId, status, transferredAt, checksum, fileSizeBytes)
+    ) = measurementDao.updateTransferDetails(fileId, status, transferredAt, checksum, checksumStatus, fileSizeBytes)
 
     /** Deletes all measurement records for a specific session. */
     suspend fun deleteMeasurementsForSession(sessionId: Long) =
@@ -245,41 +291,40 @@ class MeasurementRepository(
     suspend fun searchResults(
         sessionId: Long? = null,
         predictionLabel: PredictionLabel? = null,
-        predictStatus: PredictStatus? = null,
+        analysisStatus: AnalysisStatus? = null,
+        exportStatus: ExportStatus? = null,
         modelVersion: String? = null,
+        preprocessingVersion: String? = null,
         minConfidence: Double? = null,
         maxConfidence: Double? = null,
-        fromPredictedAt: Long? = null,
-        toPredictedAt: Long? = null
+        fromAnalyzedAt: Long? = null,
+        toAnalyzedAt: Long? = null
     ): List<ResultEntity> = resultDao.searchResults(
         sessionId = sessionId,
         predictionLabel = predictionLabel?.name,
-        predictStatus = predictStatus?.name,
+        analysisStatus = analysisStatus?.name,
+        exportStatus = exportStatus?.name,
         modelVersion = modelVersion,
+        preprocessingVersion = preprocessingVersion,
         minConfidence = minConfidence,
         maxConfidence = maxConfidence,
-        fromPredictedAt = fromPredictedAt,
-        toPredictedAt = toPredictedAt
+        fromAnalyzedAt = fromAnalyzedAt,
+        toAnalyzedAt = toAnalyzedAt
     )
 
     /** Retrieves the most recent prediction result for a session. */
     suspend fun getLatestResultForSession(sessionId: Long): ResultEntity? =
         resultDao.getLatestResultBySession(sessionId)
 
-    /** Checks if a prediction result exists for a specific session and model version. */
-    suspend fun getResultByModelVersion(
+    /** Checks if a prediction result exists for a specific session, model version, and preprocessing version. */
+    suspend fun getResultByModelAndPreprocessing(
         sessionId: Long,
-        modelVersion: String
-    ): ResultEntity? = resultDao.getResultByModelVersion(sessionId, modelVersion)
+        modelVersion: String,
+        preprocessingVersion: String? = null
+    ): ResultEntity? = resultDao.getResultByModelAndPreprocessing(sessionId, modelVersion, preprocessingVersion)
 
-    /** Updates the prediction status of a result record. */
-    suspend fun updatePredictStatus(
-        predictionId: Long,
-        status: PredictStatus
-    ): Int = resultDao.updatePredictStatus(predictionId, status)
-
-    /** Deletes a specific prediction result record by its prediction ID. */
-    suspend fun deleteResult(predictionId: Long): Int = resultDao.deleteResultById(predictionId)
+    /** Deletes a specific prediction result record by its result ID. */
+    suspend fun deleteResult(resultId: Long): Int = resultDao.deleteResultById(resultId)
 
     /** Deletes all prediction results associated with a session. */
     suspend fun deleteResultsForSession(sessionId: Long) = resultDao.deleteResultsBySession(sessionId)
@@ -335,6 +380,7 @@ class MeasurementRepository(
 @Database(
     entities = [
         PatientEntity::class,
+        DeviceEntity::class,
         SessionEntity::class,
         MeasurementEntity::class,
         ResultEntity::class
@@ -345,6 +391,7 @@ class MeasurementRepository(
 @TypeConverters(Converters::class)
 abstract class ResearchDatabase : RoomDatabase() {
     abstract fun patientDao(): PatientDao
+    abstract fun deviceDao(): DeviceDao
     abstract fun sessionDao(): SessionDao
     abstract fun measurementDao(): MeasurementDao
     abstract fun resultDao(): ResultDao
@@ -373,22 +420,12 @@ abstract class ResearchDatabase : RoomDatabase() {
 
 class Converters {
     @TypeConverter
-    fun fromChecksumStatus(status: ChecksumStatus?): String? = status?.name
+    fun fromSexGender(sex: SexGender?): String? = sex?.name
 
     @TypeConverter
-    fun toChecksumStatus(value: String?): ChecksumStatus? {
+    fun toSexGender(value: String?): SexGender? {
         return value?.let {
-            try { ChecksumStatus.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromPatientSex(sex: PatientSex?): String? = sex?.name
-
-    @TypeConverter
-    fun toPatientSex(value: String?): PatientSex? {
-        return value?.let {
-            try { PatientSex.valueOf(it) } catch (e: Exception) { null }
+            try { SexGender.valueOf(it) } catch (e: Exception) { null }
         }
     }
 
@@ -403,66 +440,152 @@ class Converters {
     }
 
     @TypeConverter
-    fun fromPatientConditionStatus(status: PatientStatus?): String? = status?.name
+    fun fromAgeGroup(ageGroup: AgeGroup?): String? = ageGroup?.name
 
     @TypeConverter
-    fun toPatientConditionStatus(value: String?): PatientStatus? {
+    fun toAgeGroup(value: String?): AgeGroup? {
         return value?.let {
-            try { PatientStatus.valueOf(it) } catch (e: Exception) { null }
+            try { AgeGroup.valueOf(it) } catch (e: Exception) { null }
         }
     }
 
     @TypeConverter
-    fun fromSessionStatus(status: SessionStatus?): String? = status?.name
+    fun fromStudyGroup(studyGroup: StudyGroup?): String? = studyGroup?.name
 
     @TypeConverter
-    fun toSessionStatus(value: String?): SessionStatus? {
+    fun toStudyGroup(value: String?): StudyGroup? {
         return value?.let {
-            try { SessionStatus.valueOf(it) } catch (e: Exception) { null }
+            try { StudyGroup.valueOf(it) } catch (e: Exception) { null }
         }
     }
 
     @TypeConverter
-    fun fromTransferStatus(status: TransferStatus?): String? = status?.name
+    fun fromRecordValidityStatus(status: RecordValidityStatus): String = status.name
 
     @TypeConverter
-    fun toTransferStatus(value: String?): TransferStatus? {
-        return value?.let {
-            try { TransferStatus.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromSignalQuality(quality: SignalQuality?): String? = quality?.name
-
-    @TypeConverter
-    fun toSignalQuality(value: String?): SignalQuality? {
-        return value?.let {
-            try { SignalQuality.valueOf(it) } catch (e: Exception) { null }
-        }
-    }
-
-    @TypeConverter
-    fun fromPredictionLabel(label: PredictionLabel): String = label.name
-
-    @TypeConverter
-    fun toPredictionLabel(value: String): PredictionLabel {
+    fun toRecordValidityStatus(value: String): RecordValidityStatus {
         return try {
-            PredictionLabel.valueOf(value)
+            RecordValidityStatus.valueOf(value)
         } catch (e: Exception) {
-            PredictionLabel.NOT_ANALYSED
+            RecordValidityStatus.VALID
         }
     }
 
     @TypeConverter
-    fun fromPredictStatus(status: PredictStatus): String = status.name
+    fun fromSensorStatus(status: SensorStatus): String = status.name
 
     @TypeConverter
-    fun toPredictStatus(value: String): PredictStatus {
+    fun toSensorStatus(value: String): SensorStatus {
         return try {
-            PredictStatus.valueOf(value)
+            SensorStatus.valueOf(value)
         } catch (e: Exception) {
-            PredictStatus.PREDICTED
+            SensorStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromSessionTransferStatus(status: SessionTransferStatus): String = status.name
+
+    @TypeConverter
+    fun toSessionTransferStatus(value: String): SessionTransferStatus {
+        return try {
+            SessionTransferStatus.valueOf(value)
+        } catch (e: Exception) {
+            SessionTransferStatus.NOT_TRANSFERRED
+        }
+    }
+
+    @TypeConverter
+    fun fromSessionCompletenessStatus(status: SessionCompletenessStatus): String = status.name
+
+    @TypeConverter
+    fun toSessionCompletenessStatus(value: String): SessionCompletenessStatus {
+        return try {
+            SessionCompletenessStatus.valueOf(value)
+        } catch (e: Exception) {
+            SessionCompletenessStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromArmSide(arm: ArmSide): String = arm.name
+
+    @TypeConverter
+    fun toArmSide(value: String): ArmSide {
+        return try {
+            ArmSide.valueOf(value)
+        } catch (e: Exception) {
+            ArmSide.UNKNOWN
+        }
+    }
+
+    @TypeConverter
+    fun fromMeasurementTransferStatus(status: MeasurementTransferStatus): String = status.name
+
+    @TypeConverter
+    fun toMeasurementTransferStatus(value: String): MeasurementTransferStatus {
+        return try {
+            MeasurementTransferStatus.valueOf(value)
+        } catch (e: Exception) {
+            MeasurementTransferStatus.NOT_TRANSFERRED
+        }
+    }
+
+    @TypeConverter
+    fun fromFileCompletenessStatus(status: FileCompletenessStatus): String = status.name
+
+    @TypeConverter
+    fun toFileCompletenessStatus(value: String): FileCompletenessStatus {
+        return try {
+            FileCompletenessStatus.valueOf(value)
+        } catch (e: Exception) {
+            FileCompletenessStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromChecksumStatus(status: ChecksumStatus): String = status.name
+
+    @TypeConverter
+    fun toChecksumStatus(value: String): ChecksumStatus {
+        return try {
+            ChecksumStatus.valueOf(value)
+        } catch (e: Exception) {
+            ChecksumStatus.NOT_CHECKED
+        }
+    }
+
+    @TypeConverter
+    fun fromPredictionLabel(label: PredictionLabel?): String? = label?.name
+
+    @TypeConverter
+    fun toPredictionLabel(value: String?): PredictionLabel? {
+        return value?.let {
+            try { PredictionLabel.valueOf(it) } catch (e: Exception) { null }
+        }
+    }
+
+    @TypeConverter
+    fun fromAnalysisStatus(status: AnalysisStatus): String = status.name
+
+    @TypeConverter
+    fun toAnalysisStatus(value: String): AnalysisStatus {
+        return try {
+            AnalysisStatus.valueOf(value)
+        } catch (e: Exception) {
+            AnalysisStatus.ANALYZED
+        }
+    }
+
+    @TypeConverter
+    fun fromExportStatus(status: ExportStatus): String = status.name
+
+    @TypeConverter
+    fun toExportStatus(value: String): ExportStatus {
+        return try {
+            ExportStatus.valueOf(value)
+        } catch (e: Exception) {
+            ExportStatus.NOT_EXPORTED
         }
     }
 }
@@ -480,11 +603,40 @@ data class PatientEntity(
     val patient_id: Long = 0,
 
     val patient_code: String,
-    val sex: PatientSex? = null,
-    val age: Int? = null,
-    val status: PatientStatus? = null,
+    val sex: SexGender? = null,
+    val age: AgeGroup? = null,
+    val study_group: StudyGroup? = null,
     val location: String? = null,
     val created_at: Long = System.currentTimeMillis(),
+    val modified_at: Long? = null,
+    val validity_status: RecordValidityStatus = RecordValidityStatus.VALID,
+    val void_reason: String? = null,
+    val voided_at: Long? = null,
+    val notes: String? = null
+)
+
+/**
+ * Room Entity: Device represents a sensor hardware device.
+ */
+@Entity(
+    tableName = "devices",
+    indices = [
+        Index(value = ["device_code"], unique = true),
+        Index(value = ["bluetooth_address"], unique = true)
+    ]
+)
+data class DeviceEntity(
+    @PrimaryKey(autoGenerate = true)
+    val device_id: Long = 0,
+
+    val device_code: String,
+    val bluetooth_address: String? = null,
+    val firmware_version: String? = null,
+    val last_battery_level: Int? = null,
+    val last_memory_available_byte: Long? = null,
+    val last_file_count_on_device: Int? = null,
+    val sensor_status: SensorStatus = SensorStatus.NOT_CHECKED,
+    val last_checked_at: Long? = null,
     val notes: String? = null
 )
 
@@ -506,6 +658,12 @@ data class PatientEntity(
             parentColumns = ["patient_id"],
             childColumns = ["patient_id"],
             onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = DeviceEntity::class,
+            parentColumns = ["device_id"],
+            childColumns = ["device_id"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
     indices = [
@@ -517,18 +675,23 @@ data class SessionEntity(
     @PrimaryKey(autoGenerate = true)
     val session_id: Long = 0,
 
-    val device_id: Long = 1,
     val patient_id: Long,
     val recording_day: String,
+    val device_id: Long = 1,
+    val arm: ArmSide = ArmSide.UNKNOWN,
     val start_time: Long? = null,
     val end_time: Long? = null,
-    val arm: Arm? = null,
     val recording_interval: Int = 10,
     val recording_repeats: Int = 5,
     val frequency_start_ghz: Double = 1.0,
     val frequency_end_ghz: Double = 6.0,
-    val session_status: SessionStatus? = SessionStatus.ON_SENSOR,
-    val signal_quality: SignalQuality? = null,
+    val transferred_at: Long? = null,
+    val modified_at: Long? = null,
+    val transfer_status: SessionTransferStatus = SessionTransferStatus.NOT_TRANSFERRED,
+    val completeness_status: SessionCompletenessStatus = SessionCompletenessStatus.NOT_CHECKED,
+    val validity_status: RecordValidityStatus = RecordValidityStatus.VALID,
+    val void_reason: String? = null,
+    val voided_at: Long? = null,
     val notes: String? = null
 )
 
@@ -544,9 +707,7 @@ data class SessionEntity(
         )
     ],
     indices = [
-        Index(value = ["session_id", "sensor_file_name"], unique = true),
-        Index(value = ["session_id", "recording_index"]),
-        Index(value = ["session_id", "repeat_index"])
+        Index(value = ["session_id", "sensor_file_name"], unique = true)
     ]
 )
 data class MeasurementEntity(
@@ -555,17 +716,17 @@ data class MeasurementEntity(
 
     val session_id: Long,
     val sensor_file_name: String,
-    val tablet_file_name: String,
-    val tablet_file_path: String,
-    val recording_index: Int,
-    val repeat_index: Int,
+    val tablet_file_name: String? = null,
+    val tablet_file_path: String? = null,
     val file_index: Int? = null,
     val recorded_at: Long? = null,
     val transferred_at: Long? = null,
-    val transfer_status: TransferStatus? = TransferStatus.ON_SENSOR,
-    val signal_quality: SignalQuality? = null,
-    val checksum: ChecksumStatus? = null,
+    val transfer_status: MeasurementTransferStatus = MeasurementTransferStatus.NOT_TRANSFERRED,
+    val file_completeness_status: FileCompletenessStatus = FileCompletenessStatus.NOT_CHECKED,
+    val checksum: String? = null,
+    val checksum_status: ChecksumStatus = ChecksumStatus.NOT_CHECKED,
     val file_size_bytes: Long? = null,
+    val modified_at: Long? = null,
     val notes: String? = null
 )
 
@@ -580,21 +741,26 @@ data class MeasurementEntity(
         )
     ],
     indices = [
-        Index(value = ["session_id", "model_version"], unique = true)
+        Index(value = ["session_id", "model_version", "preprocessing_version"], unique = true)
     ]
 )
 data class ResultEntity(
     @PrimaryKey(autoGenerate = true)
-    val prediction_id: Long = 0,
+    val result_id: Long = 0,
 
     val session_id: Long,
     val model_version: String,
-    val predict_status: PredictStatus = PredictStatus.PREDICTED,
-    val prediction_label: PredictionLabel,
+    val preprocessing_version: String? = null,
+    val analysis_config_json: String? = null,
+    val prediction_label: PredictionLabel? = null,
     val probability_json: String? = null,
     val confidence: Double? = null,
     val input_file_count: Int? = null,
-    val predicted_at: Long = System.currentTimeMillis(),
+    val analysis_status: AnalysisStatus = AnalysisStatus.ANALYZED,
+    val analyzed_at: Long = System.currentTimeMillis(),
+    val export_status: ExportStatus = ExportStatus.NOT_EXPORTED,
+    val exported_at: Long? = null,
+    val modified_at: Long? = null,
     val notes: String? = null
 )
 
@@ -637,21 +803,63 @@ interface PatientDao {
     SELECT * FROM patients
     WHERE (:patientCodeQuery IS NULL OR patient_code LIKE '%' || :patientCodeQuery || '%')
       AND (:sex IS NULL OR sex = :sex)
-      AND (:minAge IS NULL OR age >= :minAge)
-      AND (:maxAge IS NULL OR age <= :maxAge)
-      AND (:status IS NULL OR status = :status)
+      AND (:ageGroup IS NULL OR age = :ageGroup)
+      AND (:studyGroup IS NULL OR study_group = :studyGroup)
       AND (:location IS NULL OR location = :location)
+      AND (:validityStatus IS NULL OR validity_status = :validityStatus)
     ORDER BY patient_code ASC
     """
     )
     suspend fun searchPatients(
         patientCodeQuery: String?,
         sex: String?,
-        minAge: Int?,
-        maxAge: Int?,
-        status: String?,
-        location: String?
+        ageGroup: String?,
+        studyGroup: String?,
+        location: String?,
+        validityStatus: String?
     ): List<PatientEntity>
+}
+
+@Dao
+interface DeviceDao {
+
+    /** Inserts a new device record into the database and returns the generated device ID. */
+    @Insert
+    suspend fun insertDevice(device: DeviceEntity): Long
+
+    /** Updates an existing device record in the database. */
+    @Update
+    suspend fun updateDevice(device: DeviceEntity)
+
+    /** Retrieves all device records ordered by device code. */
+    @Query("SELECT * FROM devices ORDER BY device_code ASC")
+    suspend fun getAllDevices(): List<DeviceEntity>
+
+    /** Retrieves a device matching the exact device code. */
+    @Query("SELECT * FROM devices WHERE device_code = :deviceCode LIMIT 1")
+    suspend fun getDeviceByCode(deviceCode: String): DeviceEntity?
+
+    /** Retrieves a device matching the bluetooth address. */
+    @Query("SELECT * FROM devices WHERE bluetooth_address = :bluetoothAddress LIMIT 1")
+    suspend fun getDeviceByBluetoothAddress(bluetoothAddress: String): DeviceEntity?
+
+    /** Searches and filters device records. */
+    @Query(
+        """
+    SELECT * FROM devices
+    WHERE (:deviceCodeQuery IS NULL OR device_code LIKE '%' || :deviceCodeQuery || '%')
+      AND (:sensorStatus IS NULL OR sensor_status = :sensorStatus)
+    ORDER BY device_code ASC
+    """
+    )
+    suspend fun searchDevices(
+        deviceCodeQuery: String?,
+        sensorStatus: String?
+    ): List<DeviceEntity>
+
+    /** Deletes a device record by ID. */
+    @Query("DELETE FROM devices WHERE device_id = :deviceId")
+    suspend fun deleteDeviceById(deviceId: Long): Int
 }
 
 @Dao
@@ -707,9 +915,9 @@ interface SessionDao {
         deviceId: Long
     ): List<SessionEntity>
 
-    /** Updates the status of a specific measurement session. */
-    @Query("UPDATE sessions SET session_status = :status WHERE session_id = :sessionId")
-    suspend fun updateSessionStatus(sessionId: Long, status: SessionStatus?)
+    /** Updates the transfer status of a specific measurement session. */
+    @Query("UPDATE sessions SET transfer_status = :status, modified_at = :modifiedAt WHERE session_id = :sessionId")
+    suspend fun updateSessionTransferStatus(sessionId: Long, status: SessionTransferStatus, modifiedAt: Long = System.currentTimeMillis())
 
     /** Deletes a session by its ID, cascading deletion to associated measurements and results. */
     @Query("DELETE FROM sessions WHERE session_id = :sessionId")
@@ -723,8 +931,9 @@ interface SessionDao {
       AND (:deviceId IS NULL OR device_id = :deviceId)
       AND (:recordingDay IS NULL OR recording_day = :recordingDay)
       AND (:arm IS NULL OR arm = :arm)
-      AND (:sessionStatus IS NULL OR session_status = :sessionStatus)
-      AND (:signalQuality IS NULL OR signal_quality = :signalQuality)
+      AND (:transferStatus IS NULL OR transfer_status = :transferStatus)
+      AND (:completenessStatus IS NULL OR completeness_status = :completenessStatus)
+      AND (:validityStatus IS NULL OR validity_status = :validityStatus)
       AND (:recordingInterval IS NULL OR recording_interval = :recordingInterval)
       AND (:recordingRepeats IS NULL OR recording_repeats = :recordingRepeats)
       AND (:frequencyStartGhz IS NULL OR frequency_start_ghz = :frequencyStartGhz)
@@ -737,8 +946,9 @@ interface SessionDao {
         deviceId: Long?,
         recordingDay: String?,
         arm: String?,
-        sessionStatus: String?,
-        signalQuality: String?,
+        transferStatus: String?,
+        completenessStatus: String?,
+        validityStatus: String?,
         recordingInterval: Int?,
         recordingRepeats: Int?,
         frequencyStartGhz: Double?,
@@ -774,17 +984,19 @@ interface MeasurementDao {
     suspend fun getMeasurementCount(sessionId: Long): Int
 
     /** Updates the transfer status for a specific measurement file. */
-    @Query("UPDATE measurements SET transfer_status = :status WHERE file_id = :measurementId")
-    suspend fun updateTransferStatus(measurementId: Long, status: String): Int
+    @Query("UPDATE measurements SET transfer_status = :status, modified_at = :modifiedAt WHERE file_id = :measurementId")
+    suspend fun updateTransferStatus(measurementId: Long, status: MeasurementTransferStatus, modifiedAt: Long = System.currentTimeMillis()): Int
 
     /** Updates the transfer status and details for a specific measurement file. */
-    @Query("UPDATE measurements SET transfer_status = :status, transferred_at = :transferredAt, checksum = :checksum, file_size_bytes = :fileSizeBytes WHERE file_id = :fileId")
+    @Query("UPDATE measurements SET transfer_status = :status, transferred_at = :transferredAt, checksum = :checksum, checksum_status = :checksumStatus, file_size_bytes = :fileSizeBytes, modified_at = :modifiedAt WHERE file_id = :fileId")
     suspend fun updateTransferDetails(
         fileId: Long,
-        status: TransferStatus?,
+        status: MeasurementTransferStatus,
         transferredAt: Long?,
-        checksum: ChecksumStatus?,
-        fileSizeBytes: Long?
+        checksum: String?,
+        checksumStatus: ChecksumStatus,
+        fileSizeBytes: Long?,
+        modifiedAt: Long = System.currentTimeMillis()
     )
 
     /** Deletes a single measurement file record by its file ID. */
@@ -800,23 +1012,23 @@ interface MeasurementDao {
         """
     SELECT * FROM measurements
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
-      AND (:recordingIndex IS NULL OR recording_index = :recordingIndex)
-      AND (:repeatIndex IS NULL OR repeat_index = :repeatIndex)
       AND (:transferStatus IS NULL OR transfer_status = :transferStatus)
+      AND (:fileCompletenessStatus IS NULL OR file_completeness_status = :fileCompletenessStatus)
+      AND (:checksumStatus IS NULL OR checksum_status = :checksumStatus)
       AND (:sensorFileName IS NULL OR sensor_file_name LIKE '%' || :sensorFileName || '%')
       AND (:tabletFileName IS NULL OR tablet_file_name LIKE '%' || :tabletFileName || '%')
       AND (:minFileSizeBytes IS NULL OR file_size_bytes >= :minFileSizeBytes)
       AND (:maxFileSizeBytes IS NULL OR file_size_bytes <= :maxFileSizeBytes)
       AND (:fromTransferredAt IS NULL OR transferred_at >= :fromTransferredAt)
       AND (:toTransferredAt IS NULL OR transferred_at <= :toTransferredAt)
-    ORDER BY session_id DESC, recording_index ASC, repeat_index ASC
+    ORDER BY session_id DESC, file_id ASC
     """
     )
     suspend fun searchMeasurements(
         sessionId: Long?,
-        recordingIndex: Int?,
-        repeatIndex: Int?,
         transferStatus: String?,
+        fileCompletenessStatus: String?,
+        checksumStatus: String?,
         sensorFileName: String?,
         tabletFileName: String?,
         minFileSizeBytes: Long?,
@@ -829,7 +1041,7 @@ interface MeasurementDao {
 @Dao
 interface ResultDao {
 
-    /** Inserts a new prediction result record and returns its generated prediction ID. */
+    /** Inserts a new prediction result record and returns its generated result ID. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertResult(result: ResultEntity): Long
 
@@ -837,24 +1049,24 @@ interface ResultDao {
     @Update
     suspend fun updateResult(result: ResultEntity): Int
 
-    /** Retrieves all prediction results for a given session sorted by prediction timestamp. */
-    @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY predicted_at DESC")
+    /** Retrieves all prediction results for a given session sorted by analysis timestamp. */
+    @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY analyzed_at DESC")
     suspend fun getResultsBySession(sessionId: Long): List<ResultEntity>
 
     /** Retrieves the most recent prediction result for a session. */
-    @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY predicted_at DESC LIMIT 1")
+    @Query("SELECT * FROM results WHERE session_id = :sessionId ORDER BY analyzed_at DESC LIMIT 1")
     suspend fun getLatestResultBySession(sessionId: Long): ResultEntity?
 
-    /** Retrieves a prediction result matching exact session ID and model version. */
-    @Query("SELECT * FROM results WHERE session_id = :sessionId AND model_version = :modelVersion LIMIT 1")
-    suspend fun getResultByModelVersion(sessionId: Long, modelVersion: String): ResultEntity?
+    /** Retrieves a prediction result matching exact session ID, model version, and preprocessing version. */
+    @Query("SELECT * FROM results WHERE session_id = :sessionId AND model_version = :modelVersion AND (:preprocessingVersion IS NULL OR preprocessing_version = :preprocessingVersion) LIMIT 1")
+    suspend fun getResultByModelAndPreprocessing(sessionId: Long, modelVersion: String, preprocessingVersion: String?): ResultEntity?
 
-    /** Updates the prediction status of a specific result record. */
-    @Query("UPDATE results SET predict_status = :status WHERE prediction_id = :predictionId")
-    suspend fun updatePredictStatus(predictionId: Long, status: PredictStatus): Int
+    /** Updates the analysis status and export status of a result record. */
+    @Query("UPDATE results SET analysis_status = :analysisStatus, export_status = :exportStatus, modified_at = :modifiedAt WHERE result_id = :resultId")
+    suspend fun updateResultStatus(resultId: Long, analysisStatus: AnalysisStatus, exportStatus: ExportStatus, modifiedAt: Long = System.currentTimeMillis()): Int
 
     /** Deletes a specific prediction result record by its ID. */
-    @Query("DELETE FROM results WHERE prediction_id = :resultId")
+    @Query("DELETE FROM results WHERE result_id = :resultId")
     suspend fun deleteResultById(resultId: Long): Int
 
     /** Deletes all prediction result records associated with a session. */
@@ -867,24 +1079,28 @@ interface ResultDao {
     SELECT * FROM results
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
       AND (:predictionLabel IS NULL OR prediction_label = :predictionLabel)
-      AND (:predictStatus IS NULL OR predict_status = :predictStatus)
+      AND (:analysisStatus IS NULL OR analysis_status = :analysisStatus)
+      AND (:exportStatus IS NULL OR export_status = :exportStatus)
       AND (:modelVersion IS NULL OR model_version = :modelVersion)
+      AND (:preprocessingVersion IS NULL OR preprocessing_version = :preprocessingVersion)
       AND (:minConfidence IS NULL OR confidence >= :minConfidence)
       AND (:maxConfidence IS NULL OR confidence <= :maxConfidence)
-      AND (:fromPredictedAt IS NULL OR predicted_at >= :fromPredictedAt)
-      AND (:toPredictedAt IS NULL OR predicted_at <= :toPredictedAt)
-    ORDER BY predicted_at DESC
+      AND (:fromAnalyzedAt IS NULL OR analyzed_at >= :fromAnalyzedAt)
+      AND (:toAnalyzedAt IS NULL OR analyzed_at <= :toAnalyzedAt)
+    ORDER BY analyzed_at DESC
     """
     )
     suspend fun searchResults(
         sessionId: Long?,
         predictionLabel: String?,
-        predictStatus: String?,
+        analysisStatus: String?,
+        exportStatus: String?,
         modelVersion: String?,
+        preprocessingVersion: String?,
         minConfidence: Double?,
         maxConfidence: Double?,
-        fromPredictedAt: Long?,
-        toPredictedAt: Long?
+        fromAnalyzedAt: Long?,
+        toAnalyzedAt: Long?
     ): List<ResultEntity>
 }
 
@@ -892,7 +1108,7 @@ interface ResultDao {
 /**
  * Class definition & Enums
  */
-enum class PatientSex {
+enum class SexGender {
     MALE,
     FEMALE,
     OTHER,
@@ -905,48 +1121,87 @@ enum class Arm {
     UNKNOWN
 }
 
-enum class PatientStatus {
-    MF_POSITIVE,
-    MF_NEGATIVE,
-    UNCERTAIN
-}
-
-enum class SessionStatus {
-    ON_SENSOR,
-    TRANSFERRED,
-    EXPORTED,
-    CORRUPTED
-}
-
-enum class TransferStatus {
-    ON_SENSOR, /** File exists on the sensor hardware, pending transfer to the tablet. */
-    TRANSFERRED, /** File was successfully transferred to tablet storage and verified. */
-    MISSING, /** File was expected but not found on the sensor hardware. */
-    CORRUPTED /** File was transferred, but data is damaged or incomplete. */
-
-}
-
-enum class PredictStatus {
-    ON_SENSOR,
-    TRANSFERRED,
-    PREDICTED,
-    EXPORTED
-}
-
-enum class SignalQuality {
-    GOOD,
-    ACCEPTABLE,
-    BAD,
-    ERROR,
+enum class AgeGroup {
+    CHILD,
+    ADULT,
+    OLDER_ADULT,
     UNKNOWN
 }
 
+enum class StudyGroup {
+    MF_POSITIVE,
+    MF_NEGATIVE_LF_POSITIVE,
+    CONTROL,
+    UNCERTAIN
+}
+
+enum class RecordValidityStatus {
+    VALID,
+    VOIDED
+}
+
+enum class SensorStatus {
+    NOT_CHECKED,
+    OK,
+    WARNING,
+    ERROR
+}
+
+enum class ArmSide {
+    LEFT,
+    RIGHT,
+    UNKNOWN
+}
+
+enum class SessionTransferStatus {
+    NOT_TRANSFERRED,
+    PARTIALLY_TRANSFERRED,
+    TRANSFERRED,
+    TRANSFER_FAILED
+}
+
+enum class SessionCompletenessStatus {
+    NOT_CHECKED,
+    COMPLETE,
+    INCOMPLETE,
+    NO_DATA_FOUND
+}
+
+enum class MeasurementTransferStatus {
+    NOT_TRANSFERRED,
+    TRANSFERRED,
+    TRANSFER_FAILED
+}
+
+enum class FileCompletenessStatus {
+    NOT_CHECKED,
+    COMPLETE,
+    INCOMPLETE,
+    MISSING_ON_DEVICE
+}
+
 enum class ChecksumStatus {
-    PASS,
-    FAIL
+    NOT_CHECKED,
+    MATCHED,
+    MISMATCHED,
+    NOT_AVAILABLE
+}
+
+enum class AnalysisStatus {
+    ANALYZED,
+    ANALYSIS_FAILED
+}
+
+enum class ExportStatus {
+    NOT_EXPORTED,
+    EXPORTED,
+    EXPORT_FAILED
 }
 
 enum class PredictionLabel(val displayName: String) {
+    POSITIVE("POSITIVE"),
+    NEGATIVE("NEGATIVE"),
+    UNCLASSIFIED("UNCLASSIFIED"),
     MF_PLUS("MF+"),
     MF_MINUS_LF_PLUS("MF-LF+"),
     MF_MINUS("MF-"),
