@@ -318,6 +318,7 @@ class MeasurementRepository(
         sessionId: Long? = null,
         predictionLabel: PredictionLabel? = null,
         analysisStatus: AnalysisStatus? = null,
+        resultVisibilityStatus: ResultVisibilityStatus? = null,
         exportStatus: ExportStatus? = null,
         modelVersion: String? = null,
         preprocessingVersion: String? = null,
@@ -331,6 +332,7 @@ class MeasurementRepository(
         sessionId = sessionId,
         predictionLabel = predictionLabel?.name,
         analysisStatus = analysisStatus?.name,
+        resultVisibilityStatus = resultVisibilityStatus?.name,
         exportStatus = exportStatus?.name,
         modelVersion = modelVersion,
         preprocessingVersion = preprocessingVersion,
@@ -341,6 +343,12 @@ class MeasurementRepository(
         fromExportedAt = fromExportedAt,
         toExportedAt = toExportedAt
     )
+
+    /** Updates the visibility status of a prediction result (e.g. CURRENT, SUPERSEDED, VOIDED). */
+    suspend fun updateResultVisibilityStatus(
+        resultId: Long,
+        status: ResultVisibilityStatus?
+    ): Int = resultDao.updateResultVisibilityStatus(resultId, status)
 
     /** Retrieves the most recent prediction result for a session. */
     suspend fun findLatestResultForSession(sessionId: Long): ResultEntity? =
@@ -773,6 +781,10 @@ interface ResultDao {
     @Query("UPDATE results SET analysis_status = :analysisStatus, export_status = :exportStatus, modified_at = :modifiedAt WHERE result_id = :resultId")
     suspend fun updateResultStatus(resultId: Long, analysisStatus: AnalysisStatus, exportStatus: ExportStatus, modifiedAt: Long = System.currentTimeMillis()): Int
 
+    /** Updates the result visibility status of a specific result record (CURRENT, SUPERSEDED, VOIDED). */
+    @Query("UPDATE results SET result_visibility_status = :status, modified_at = :modifiedAt WHERE result_id = :resultId")
+    suspend fun updateResultVisibilityStatus(resultId: Long, status: ResultVisibilityStatus?, modifiedAt: Long = System.currentTimeMillis()): Int
+
     /** Deletes a specific prediction result record by its ID. */
     @Query("DELETE FROM results WHERE result_id = :resultId")
     suspend fun deleteResultById(resultId: Long): Int
@@ -788,6 +800,7 @@ interface ResultDao {
     WHERE (:sessionId IS NULL OR session_id = :sessionId)
       AND (:predictionLabel IS NULL OR prediction_label = :predictionLabel)
       AND (:analysisStatus IS NULL OR analysis_status = :analysisStatus)
+      AND (:resultVisibilityStatus IS NULL OR result_visibility_status = :resultVisibilityStatus)
       AND (:exportStatus IS NULL OR export_status = :exportStatus)
       AND (:modelVersion IS NULL OR model_version = :modelVersion)
       AND (:preprocessingVersion IS NULL OR preprocessing_version = :preprocessingVersion)
@@ -804,6 +817,7 @@ interface ResultDao {
         sessionId: Long?,
         predictionLabel: String?,
         analysisStatus: String?,
+        resultVisibilityStatus: String?,
         exportStatus: String?,
         modelVersion: String?,
         preprocessingVersion: String?,
@@ -985,6 +999,7 @@ data class ResultEntity(
     val confidence: Double? = null,
     val input_file_count: Int? = null,
     val analysis_status: AnalysisStatus = AnalysisStatus.ANALYZED,
+    val result_visibility_status: ResultVisibilityStatus? = ResultVisibilityStatus.CURRENT,
     val analyzed_at: Long = System.currentTimeMillis(),
     val export_status: ExportStatus = ExportStatus.NOT_EXPORTED,
     val exported_at: Long? = null,
@@ -1079,6 +1094,12 @@ enum class ExportStatus {
     NOT_EXPORTED,
     EXPORTED,
     EXPORT_FAILED
+}
+
+enum class ResultVisibilityStatus {
+    CURRENT,
+    SUPERSEDED,
+    VOIDED
 }
 
 enum class PredictionLabel(val displayName: String) {
@@ -1250,6 +1271,16 @@ class Converters {
             ExportStatus.valueOf(value)
         } catch (e: Exception) {
             ExportStatus.NOT_EXPORTED
+        }
+    }
+
+    @TypeConverter
+    fun fromResultVisibilityStatus(status: ResultVisibilityStatus?): String? = status?.name
+
+    @TypeConverter
+    fun toResultVisibilityStatus(value: String?): ResultVisibilityStatus? {
+        return value?.let {
+            try { ResultVisibilityStatus.valueOf(it) } catch (e: Exception) { null }
         }
     }
 }
